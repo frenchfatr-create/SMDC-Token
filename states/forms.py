@@ -1,0 +1,10 @@
+from aiogram.fsm.state import State,StatesGroup
+class SellForm(StatesGroup): kind=State(); game=State(); description=State(); media=State(); contact=State(); payment=State(); price=State()
+class BuySearch(StatesGroup): query=State()
+class AdminRating(StatesGroup): user_id=State(); rating=State()
+class AdminWatermark(StatesGroup): photo=State()
+class AdminPaymentDetails(StatesGroup): value=State()
+class AdminReplacePhoto(StatesGroup): ad_id=State()
+class PriceEdit(StatesGroup): new_price=State()
+class ProductNumberEdit(StatesGroup): number=State()
+class OrderFlow(StatesGroup): quantity=State(); payment=State(); receipt=State()
