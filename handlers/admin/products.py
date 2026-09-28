@@ -4,7 +4,7 @@ from html import escape
 
 from config import ADMIN_IDS
 from core.constants import KIND_NAMES, STATUS_NAMES
-from core.utils import format_price
+from core.utils import format_prices
 from db.ads import get_recent_ads
 from keyboards.admin import admin_panel_kb
 
@@ -33,7 +33,7 @@ async def admin_products(callback: CallbackQuery):
             f"#{row['product_number']} (DB {row['id']}) — "
             f"{escape(KIND_NAMES.get(row['kind'], row['kind']))} — "
             f"{escape(row['game'])} — "
-            f"{format_price(row['price'])} — "
+            f"{format_prices(row)} — "
             f"{STATUS_NAMES.get(row['status'], row['status'])}"
         )
 
