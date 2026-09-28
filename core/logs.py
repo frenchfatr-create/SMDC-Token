@@ -1,20 +1,22 @@
-from db.logs import is_logging_enabled, add_log
+from db.logs import write_log
 
 
 async def log_event(
+    bot,
+    user_id: int,
     event: str,
-    message: str,
-    user_id: int | None = None,
-    admin_id: int | None = None,
+    details: str = "",
 ):
-    """Записывает событие в лог, если логирование включено."""
+    """
+    Универсальная запись события в лог.
 
-    if not await is_logging_enabled():
-        return
+    Логирование включается/выключается через db.logs.
+    Если логи выключены — ничего не происходит.
+    """
 
-    await add_log(
-        event=event,
-        message=message,
+    await write_log(
+        bot=bot,
         user_id=user_id,
-        admin_id=admin_id,
+        event=event,
+        details=details,
     )
