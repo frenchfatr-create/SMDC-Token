@@ -34,6 +34,6 @@ async def action(c):
     status="sold" if act=="sold" else "removed"
     if ad["status"]==status: await c.answer("Этот статус уже установлен.",show_alert=True); return
     await set_status(ad["id"],status)
-    await edit_ad_channel_post(bot_ref,ad,"ПРОДАН" if status=="sold" else "СНЯТ С ПРОДАЖИ")
+    await edit_ad_channel_post(bot_ref,ad,"🔴 ПРОДАН" if status=="sold" else "⚫ СНЯТ С ПРОДАЖИ")
     await write_log(bot_ref,c.from_user.id,"PRODUCT_STATUS",f"Товар #{n}: {status}")
     await c.message.edit_text(f"✅ Товар #{n} теперь: <b>{'ПРОДАН' if status=='sold' else 'СНЯТ С ПРОДАЖИ'}</b>\n\nОн скрыт из магазина.",reply_markup=admin_panel_kb()); await c.answer()
