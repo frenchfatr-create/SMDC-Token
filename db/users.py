@@ -31,7 +31,7 @@ async def get_user_rating(user_id: int):
         )
         row = await cur.fetchone()
     if not row:
-        return 5.0, 0
+        return 3.5, 0
     return float(row[0]), int(row[1])
 
 
