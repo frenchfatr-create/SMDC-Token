@@ -1,41 +1,81 @@
 from html import escape
-from aiogram import Router,F
-from aiogram.types import CallbackQuery,InlineKeyboardMarkup,InlineKeyboardButton
+
+from aiogram import Router, F
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+
 from config import ADMIN_IDS
-from db.complaints import get_open_complaints,close_complaint
-from db.ads import get_ad,set_status
-from db.blocks import block_user
+from db.complaints import get_open_complaints, close_complaint
 from db.logs import write_log
 from keyboards.admin import admin_panel_kb
-from core.channel import edit_ad_channel_post
-router=Router(); bot_ref=None
-def set_bot(bot): global bot_ref; bot_ref=bot
 
-@router.callback_query(F.data=="admin_complaints")
-async def list_(c):
-    if c.from_user.id not in ADMIN_IDS: await c.answer("⛔",show_alert=True); return
-    rows=await get_open_complaints(20)
-    if not rows: await c.message.edit_text("⚠️ <b>ЖАЛОБЫ</b>\n\nОткрытых жалоб нет.",reply_markup=admin_panel_kb()); await c.answer(); return
-    text="⚠️ <b>ОТКРЫТЫЕ ЖАЛОБЫ</b>\n\n"
-    for r in rows:
-        text+=f"#{r['id']} • товар #{r['product_number']} • пользователь <code>{r['user_id']}</code>\n{escape(r['reason'])}\n\n"
-    buttons=[]
-    for r in rows[:10]:
-        buttons.append([InlineKeyboardButton(text=f"🗑 Снять товар #{r['product_number']}",callback_data=f"complaint:remove:{r['id']}")])
-        buttons.append([InlineKeyboardButton(text=f"✅ Закрыть #{r['id']}",callback_data=f"complaint:close:{r['id']}")])
-    buttons.append([InlineKeyboardButton(text="🔙 Админ-панель",callback_data="admin_panel")])
-    await c.message.edit_text(text,reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)); await c.answer()
+router = Router()
+bot_ref = None
 
-@router.callback_query(F.data.startswith("complaint:remove:"))
-async def remove(c):
-    if c.from_user.id not in ADMIN_IDS: await c.answer("⛔",show_alert=True); return
-    cid=int(c.data.split(":")[2]); rows=await get_open_complaints(100); r=next((x for x in rows if x["id"]==cid),None)
-    if not r: await c.answer("Жалоба не найдена.",show_alert=True); return
-    ad=await get_ad(r["ad_id"]); await set_status(ad["id"],"removed"); await close_complaint(cid); await edit_ad_channel_post(bot_ref,ad,"СНЯТ С ПРОДАЖИ")
-    await write_log(bot_ref,c.from_user.id,"COMPLAINT_REMOVE",f"Жалоба #{cid}; товар #{ad['product_number']}")
-    await c.answer("Товар снят",show_alert=True); await list_(c)
+
+def set_bot(bot):
+    global bot_ref
+    bot_ref = bot
+
+
+@router.callback_query(F.data == "admin_complaints")
+async def complaints_menu(callback: CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("⛔ Нет прав.", show_alert=True)
+        return
+
+    rows = await get_open_complaints(20)
+    if not rows:
+        await callback.message.edit_text(
+            "⚠️ <b>ЖАЛОБЫ</b>\n\nОткрытых жалоб нет.",
+            reply_markup=admin_panel_kb(),
+        )
+        await callback.answer()
+        return
+
+    parts = ["⚠️ <b>ОТКРЫТЫЕ ЖАЛОБЫ</b>\n"]
+    buttons = []
+    for row in rows:
+        parts.append(
+            f"#{row['id']} • товар #{row['product_number']} • "
+            f"пользователь <code>{row['user_id']}</code>\n"
+            f"{escape(row['reason'])}\n"
+        )
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"✅ Закрыть жалобу #{row['id']}",
+                callback_data=f"complaint:close:{row['id']}",
+            )
+        ])
+    buttons.append([
+        InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_complaints"),
+        InlineKeyboardButton(text="🔙 Админ-панель", callback_data="admin_panel"),
+    ])
+
+    await callback.message.edit_text(
+        "\n".join(parts),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    )
+    await callback.answer()
+
 
 @router.callback_query(F.data.startswith("complaint:close:"))
-async def close(c):
-    if c.from_user.id not in ADMIN_IDS: await c.answer("⛔",show_alert=True); return
-    cid=int(c.data.split(":")[2]); await close_complaint(cid); await c.answer("Жалоба закрыта"); await list_(c)
+async def complaint_close(callback: CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("⛔ Нет прав.", show_alert=True)
+        return
+
+    try:
+        complaint_id = int(callback.data.split(":")[-1])
+    except ValueError:
+        await callback.answer("Некорректный ID.", show_alert=True)
+        return
+
+    await close_complaint(complaint_id)
+    await write_log(
+        bot_ref,
+        callback.from_user.id,
+        "COMPLAINT_CLOSED",
+        f"Жалоба #{complaint_id}",
+    )
+    await callback.answer("Жалоба закрыта")
+    await complaints_menu(callback)
