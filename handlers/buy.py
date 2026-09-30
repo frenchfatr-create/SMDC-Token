@@ -114,5 +114,5 @@ async def mark_sold(c):
     i=int(c.data.split(":")[1]); ad=await get_ad(i)
     if not ad: await c.answer("Товар не найден.",show_alert=True); return
     if c.from_user.id!=ad["user_id"] and c.from_user.id not in ADMIN_IDS: await c.answer("⛔ Нет прав.",show_alert=True); return
-    await set_status(i,"sold"); await edit_ad_channel_post(bot_ref,ad,"ПРОДАН"); await write_log(bot_ref,c.from_user.id,"PRODUCT_SOLD",f"Товар #{ad['product_number']}")
+    await set_status(i,"sold"); await edit_ad_channel_post(bot_ref,ad,"🔴 ПРОДАН"); await write_log(bot_ref,c.from_user.id,"PRODUCT_SOLD",f"Товар #{ad['product_number']}")
     await c.message.edit_text(f"💰 <b>Товар #{ad['product_number']} отмечен как ПРОДАН.</b>\n\nОн больше не отображается в магазине.",reply_markup=main_menu(c.from_user.id)); await c.answer("Продано")
