@@ -1,6 +1,6 @@
 from aiogram.fsm.state import State,StatesGroup
 class SellForm(StatesGroup):
-    kind=State(); game=State(); description=State(); media=State(); contact=State(); payment=State()
+    kind=State(); game=State(); description=State(); tokens=State(); media=State(); contact=State(); payment=State()
     price_rub=State(); price_stars=State(); preview=State()
 class BuySearch(StatesGroup): query=State()
 class AdminRating(StatesGroup): user_id=State(); rating=State()
