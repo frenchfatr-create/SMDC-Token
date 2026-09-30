@@ -9,9 +9,9 @@ async def create_ad(data, user_id, username):
     rub = float(data.get("price_rub", data.get("price", 0)) or 0)
     stars = int(data.get("price_stars", 0) or 0)
     async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("""INSERT INTO ads(user_id,username,kind,game,description,contact,payment,price,price_rub,price_stars,status,created_at,media_json,product_number,updated_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (user_id,username or "",data["kind"],data["game"],data["description"],data["contact"],data["payment"],rub,rub,stars,"pending",now(),json.dumps(data.get("media",[]),ensure_ascii=False),None,now()))
+        cur = await db.execute("""INSERT INTO ads(user_id,username,kind,game,description,contact,payment,price,price_rub,price_stars,tokens,status,created_at,media_json,product_number,updated_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (user_id,username or "",data["kind"],data["game"],data["description"],data["contact"],data["payment"],rub,rub,stars,int(data.get("tokens",0) or 0),"pending",now(),json.dumps(data.get("media",[]),ensure_ascii=False),None,now()))
         i = cur.lastrowid
         await db.execute("UPDATE ads SET product_number=? WHERE id=?", (i,i))
         await db.commit()
@@ -98,12 +98,12 @@ async def get_user_ads_count(user_id):
 async def get_user_ads(user_id,limit=30):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory=aiosqlite.Row
-        cur=await db.execute("SELECT product_number,id,kind,game,price,price_rub,price_stars,payment,status FROM ads WHERE user_id=? ORDER BY id DESC LIMIT ?",(user_id,limit)); return await cur.fetchall()
+        cur=await db.execute("SELECT product_number,id,kind,game,price,price_rub,price_stars,payment,status,tokens FROM ads WHERE user_id=? ORDER BY id DESC LIMIT ?",(user_id,limit)); return await cur.fetchall()
 
 async def get_recent_ads(limit=30):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory=aiosqlite.Row
-        cur=await db.execute("SELECT product_number,id,kind,game,price,price_rub,price_stars,payment,status FROM ads ORDER BY id DESC LIMIT ?",(limit,)); return await cur.fetchall()
+        cur=await db.execute("SELECT product_number,id,kind,game,price,price_rub,price_stars,payment,status,tokens FROM ads ORDER BY id DESC LIMIT ?",(limit,)); return await cur.fetchall()
 
 async def expire_old_ads():
     if AD_EXPIRY_DAYS<=0: return []
