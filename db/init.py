@@ -24,6 +24,7 @@ async def init_db():
         await _add_column(db, "ads", "price_stars", "INTEGER NOT NULL DEFAULT 0")
         await _add_column(db, "ads", "published_at", "TEXT")
         await _add_column(db, "ads", "expires_at", "TEXT")
+        await _add_column(db, "ads", "tokens", "INTEGER NOT NULL DEFAULT 0")
         await db.execute("UPDATE ads SET product_number=id WHERE product_number IS NULL")
         await db.execute("UPDATE ads SET price_rub=price WHERE price_rub=0 AND price>0")
         await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_ads_product_number ON ads(product_number)")
