@@ -49,6 +49,12 @@ def admin_panel_kb(logs_on=False):
             ],
             [
                 InlineKeyboardButton(
+                    text="📥 Импорт объявления",
+                    callback_data="admin_import_ad",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
                     text="⭐ Рейтинг",
                     callback_data="admin_rating",
                 ),
