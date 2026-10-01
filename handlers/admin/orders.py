@@ -3,10 +3,7 @@ from html import escape
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
 
-from config import (
-    ADMIN_IDS,
-    RECEIPT_CHAT_ID,
-)
+from config import ADMIN_IDS
 
 from core.constants import ORDER_STATUS_NAMES
 
@@ -15,13 +12,6 @@ from db.orders import (
     set_order_status,
     get_recent_orders,
 )
-
-from db.ads import (
-    get_ad,
-    set_status,
-)
-
-from core.channel import edit_ad_channel_post
 
 from keyboards.admin import (
     admin_panel_kb,
@@ -39,22 +29,6 @@ def set_bot(bot):
     bot_ref = bot
 
 
-def get_ad_id_from_order(order):
-    details = order["details"] or ""
-
-    prefix = "marketplace_ad_id="
-
-    if not details.startswith(prefix):
-        return None
-
-    try:
-        return int(
-            details[len(prefix):].split(";")[0]
-        )
-    except Exception:
-        return None
-
-
 def order_text(order):
     rub = float(order["amount_rub"] or 0)
     stars = int(order["amount_stars"] or 0)
@@ -63,7 +37,7 @@ def order_text(order):
 
     if rub > 0:
         price_parts.append(
-            f"{rub:.2f} ₽"
+            f"{rub:g} ₽"
         )
 
     if stars > 0:
@@ -71,7 +45,11 @@ def order_text(order):
             f"{stars} ⭐"
         )
 
-    price = " / ".join(price_parts) or "—"
+    price = (
+        " / ".join(price_parts)
+        if price_parts
+        else "—"
+    )
 
     return (
         f"🧾 <b>Заказ {escape(order['order_number'])}</b>\n\n"
@@ -82,43 +60,56 @@ def order_text(order):
         f"📦 {escape(order['product_name'])}\n"
         f"🔢 Количество: {order['quantity']}\n"
         f"💰 Сумма: <b>{escape(price)}</b>\n"
-        f"💳 Способ: "
-        f"{escape(order['payment_method'] or 'не указан')}\n"
-        f"📌 Статус: "
-        f"<b>{ORDER_STATUS_NAMES.get(order['status'], order['status'])}</b>"
+        f"💳 Способ оплаты: "
+        f"{escape(order['payment_method'] or 'не указан')}\n\n"
+        f"📊 <b>Статус:</b> "
+        f"{ORDER_STATUS_NAMES.get(order['status'], order['status'])}"
     )
 
 
-async def edit_admin_order_message(
+async def update_order_message(
     callback: CallbackQuery,
     order,
 ):
     text = order_text(order)
-    markup = order_admin_kb(
+
+    keyboard = order_admin_kb(
         order["order_number"],
         order["status"],
     )
 
     try:
+        # Чек обычно является photo/document.
         if callback.message.photo:
             await callback.message.edit_caption(
                 caption=text,
-                reply_markup=markup,
+                reply_markup=keyboard,
             )
+
+        elif callback.message.document:
+            await callback.message.edit_caption(
+                caption=text,
+                reply_markup=keyboard,
+            )
+
         else:
             await callback.message.edit_text(
                 text,
-                reply_markup=markup,
+                reply_markup=keyboard,
             )
 
-        return True
-
     except Exception:
-        return False
+        # Если сообщение уже нельзя редактировать,
+        # просто не ломаем обработчик.
+        pass
 
 
-@router.callback_query(F.data == "admin_orders")
-async def list_orders(callback: CallbackQuery):
+@router.callback_query(
+    F.data == "admin_orders"
+)
+async def list_orders(
+    callback: CallbackQuery,
+):
     if callback.from_user.id not in ADMIN_IDS:
         await callback.answer(
             "⛔ Нет прав",
@@ -132,9 +123,11 @@ async def list_orders(callback: CallbackQuery):
         body = (
             "📋 <b>ПОСЛЕДНИЕ ЗАКАЗЫ</b>\n\n"
             + "\n".join(
-                f"<code>{escape(r['order_number'])}</code> — "
-                f"{escape(r['product_name'])} — "
-                f"{ORDER_STATUS_NAMES.get(r['status'], r['status'])}"
+                (
+                    f"<code>{escape(r['order_number'])}</code> — "
+                    f"{escape(r['product_name'])}\n"
+                    f"{ORDER_STATUS_NAMES.get(r['status'], r['status'])}"
+                )
                 for r in rows
             )
         )
@@ -152,8 +145,12 @@ async def list_orders(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("order:"))
-async def action(callback: CallbackQuery):
+@router.callback_query(
+    F.data.startswith("order:")
+)
+async def action(
+    callback: CallbackQuery,
+):
     if callback.from_user.id not in ADMIN_IDS:
         await callback.answer(
             "⛔ Нет прав",
@@ -161,10 +158,19 @@ async def action(callback: CallbackQuery):
         )
         return
 
-    _, action_name, number = callback.data.split(
-        ":",
-        2,
-    )
+    try:
+        _, action_name, number = (
+            callback.data.split(
+                ":",
+                2,
+            )
+        )
+    except ValueError:
+        await callback.answer(
+            "❌ Ошибка заказа",
+            show_alert=True,
+        )
+        return
 
     order = await get_order(number)
 
@@ -175,39 +181,103 @@ async def action(callback: CallbackQuery):
         )
         return
 
-    status_map = {
-        "paid": "paid",
-        "complete": "completed",
-        "reject": "rejected",
-    }
+    # -------------------------
+    # 💰 ОПЛАТА ПРОШЛА
+    # -------------------------
 
-    new_status = status_map.get(
-        action_name
-    )
-
-    if not new_status:
-        await callback.answer(
-            "❌ Неизвестное действие",
-            show_alert=True,
-        )
-        return
-
-    # Защита от неправильного порядка действий.
     if action_name == "paid":
         if order["status"] != "receipt_sent":
             await callback.answer(
-                "Оплату можно подтвердить только после получения чека.",
+                "Сначала пользователь должен отправить чек.",
                 show_alert=True,
             )
             return
+
+        await set_order_status(
+            number,
+            "paid",
+            callback.from_user.id,
+        )
+
+        updated = await get_order(
+            number
+        )
+
+        if updated:
+            await update_order_message(
+                callback,
+                updated,
+            )
+
+        if bot_ref:
+            try:
+                await bot_ref.send_message(
+                    order["user_id"],
+                    (
+                        f"💰 <b>Оплата подтверждена!</b>\n\n"
+                        f"Заказ: <code>{number}</code>\n\n"
+                        "📦 Заказ передан в выполнение."
+                    ),
+                )
+            except Exception:
+                pass
+
+        await callback.answer(
+            "✅ Оплата подтверждена"
+        )
+
+        return
+
+    # -------------------------
+    # 🎉 ЗАКАЗ ВЫПОЛНЕН
+    # -------------------------
 
     if action_name == "complete":
         if order["status"] != "paid":
             await callback.answer(
-                "Сначала нужно подтвердить оплату.",
+                "Сначала подтвердите оплату.",
                 show_alert=True,
             )
             return
+
+        await set_order_status(
+            number,
+            "completed",
+            callback.from_user.id,
+        )
+
+        updated = await get_order(
+            number
+        )
+
+        if updated:
+            await update_order_message(
+                callback,
+                updated,
+            )
+
+        if bot_ref:
+            try:
+                await bot_ref.send_message(
+                    order["user_id"],
+                    (
+                        f"🎉 <b>Заказ выполнен!</b>\n\n"
+                        f"Заказ: <code>{number}</code>\n"
+                        "Спасибо за покупку."
+                    ),
+                )
+            except Exception:
+                pass
+
+        await callback.answer(
+            "🎉 Заказ завершён"
+        )
+
+        return
+
+    # -------------------------
+    # ❌ ОТКЛОНИТЬ
+    # -------------------------
 
     if action_name == "reject":
         if order["status"] in (
@@ -216,77 +286,47 @@ async def action(callback: CallbackQuery):
             "cancelled",
         ):
             await callback.answer(
-                "Заказ уже завершён.",
+                "Заказ уже закрыт.",
                 show_alert=True,
             )
             return
 
-    # При завершении marketplace-товар станет sold.
-    ad = None
-
-    if new_status == "completed":
-        ad_id = get_ad_id_from_order(order)
-
-        if ad_id:
-            ad = await get_ad(ad_id)
-
-            if ad and ad["status"] == "published":
-                await set_status(
-                    ad_id,
-                    "sold",
-                )
-
-                if bot_ref:
-                    await edit_ad_channel_post(
-                        bot_ref,
-                        ad,
-                        "🔴 ПРОДАН",
-                    )
-
-    await set_order_status(
-        number,
-        new_status,
-        callback.from_user.id,
-    )
-
-    # Получаем уже обновлённый заказ.
-    updated = await get_order(number)
-
-    if updated:
-        await edit_admin_order_message(
-            callback,
-            updated,
+        await set_order_status(
+            number,
+            "rejected",
+            callback.from_user.id,
         )
 
-    if bot_ref:
-        try:
-            if new_status == "paid":
+        updated = await get_order(
+            number
+        )
+
+        if updated:
+            await update_order_message(
+                callback,
+                updated,
+            )
+
+        if bot_ref:
+            try:
                 await bot_ref.send_message(
                     order["user_id"],
-                    f"💰 <b>Оплата подтверждена!</b>\n\n"
-                    f"Заказ: <code>{number}</code>\n"
-                    "📦 Заказ передан в выполнение.",
+                    (
+                        f"❌ <b>Заказ отклонён.</b>\n\n"
+                        f"Заказ: <code>{number}</code>\n\n"
+                        "Если это ошибка, обратитесь к администрации."
+                    ),
                 )
+            except Exception:
+                pass
 
-            elif new_status == "completed":
-                await bot_ref.send_message(
-                    order["user_id"],
-                    f"🎉 <b>Заказ завершён!</b>\n\n"
-                    f"Заказ: <code>{number}</code>\n"
-                    "Спасибо за покупку.",
-                )
+        await callback.answer(
+            "❌ Заказ отклонён"
+        )
 
-            elif new_status == "rejected":
-                await bot_ref.send_message(
-                    order["user_id"],
-                    f"❌ <b>Оплата/заказ отклонены.</b>\n\n"
-                    f"Заказ: <code>{number}</code>\n"
-                    "Если это ошибка, обратитесь к администратору.",
-                )
-
-        except Exception:
-            pass
+        return
 
     await callback.answer(
-        "Статус обновлён"
+        "❌ Неизвестное действие",
+        show_alert=True,
     )
