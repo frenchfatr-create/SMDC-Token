@@ -4,7 +4,7 @@ from config import DB_PATH
 
 async def _add_column(db, table, column, definition):
     cur = await db.execute(f"PRAGMA table_info({table})")
-    cols = {r[1] for r in await cur.fetchall()}
+    cols = {row[1] for row in await cur.fetchall()}
 
     if column not in cols:
         await db.execute(
@@ -31,7 +31,7 @@ async def init_db():
         """)
 
         # Реферальные поля.
-        # Если база старая — они добавятся автоматически.
+        # Для старой базы добавятся автоматически.
         await _add_column(
             db,
             "users",
@@ -46,7 +46,6 @@ async def init_db():
             "INTEGER"
         )
 
-        # Уникальный реферальный код
         await db.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_users_referral_code
             ON users(referral_code)
@@ -68,6 +67,24 @@ async def init_db():
         await db.execute("""
             CREATE INDEX IF NOT EXISTS idx_referrals_referrer
             ON referrals(referrer_id)
+        """)
+
+        # Перенос старых реферальных связей
+        # из users.referred_by в новую таблицу referrals.
+        #
+        # Благодаря INSERT OR IGNORE существующие записи
+        # повторно не создаются.
+        await db.execute("""
+            INSERT OR IGNORE INTO referrals(
+                referrer_id,
+                referred_id
+            )
+            SELECT
+                referred_by,
+                user_id
+            FROM users
+            WHERE referred_by IS NOT NULL
+              AND referred_by != 0
         """)
 
         # =========================
