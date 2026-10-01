@@ -11,7 +11,7 @@ from db.ads import expire_old_ads, get_ad
 from db.logs import write_log
 from core.channel import edit_ad_channel_post
 
-from handlers import start, sell, buy, profile, info, price_edit, super_mechs
+from handlers import start, sell, buy, profile, info, price_edit, super_mechs, channel_import
 from handlers.admin import router as admin_router
 from handlers.admin import (
     moderation,
@@ -96,6 +96,7 @@ async def main():
         manage_product,
         rating,
         complaints,
+        channel_import,
     ):
         module.set_bot(bot)
 
@@ -122,6 +123,7 @@ async def main():
         info.router,
         price_edit.router,
         super_mechs.router,
+        channel_import.router,
     ):
         dp.include_router(router)
 
