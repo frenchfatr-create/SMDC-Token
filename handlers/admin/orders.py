@@ -6,11 +6,17 @@ from aiogram.types import CallbackQuery
 from config import ADMIN_IDS
 
 from core.constants import ORDER_STATUS_NAMES
+from core.channel import edit_ad_channel_post
 
 from db.orders import (
     get_order,
     set_order_status,
     get_recent_orders,
+)
+
+from db.ads import (
+    get_ad,
+    mark_sold,
 )
 
 from keyboards.admin import (
@@ -79,7 +85,6 @@ async def update_order_message(
     )
 
     try:
-        # Чек обычно является photo/document.
         if callback.message.photo:
             await callback.message.edit_caption(
                 caption=text,
@@ -99,9 +104,93 @@ async def update_order_message(
             )
 
     except Exception:
-        # Если сообщение уже нельзя редактировать,
-        # просто не ломаем обработчик.
         pass
+
+
+def get_marketplace_ad_id(order):
+    """
+    Достаёт ID объявления из details.
+
+    Новый формат:
+        marketplace_ad_id=123
+
+    Также оставляем поддержку старого формата,
+    если он где-то уже сохранился:
+        Товар #80; продавец ID 123456789
+    """
+
+    details = str(order["details"] or "").strip()
+
+    if not details:
+        return None
+
+    prefix = "marketplace_ad_id="
+
+    if prefix in details:
+        try:
+            value = details.split(
+                prefix,
+                1,
+            )[1].split(
+                ";",
+                1,
+            )[0].strip()
+
+            return int(value)
+
+        except (ValueError, TypeError):
+            return None
+
+    return None
+
+
+async def complete_marketplace_ad(order):
+    """
+    После выполнения заказа помечает связанное
+    объявление маркетплейса как sold и обновляет
+    пост в канале.
+    """
+
+    ad_id = get_marketplace_ad_id(order)
+
+    if not ad_id:
+        return False
+
+    ad = await get_ad(ad_id)
+
+    if not ad:
+        return False
+
+    # Если товар уже не published, повторно ничего
+    # не меняем.
+    if ad["status"] != "published":
+        return False
+
+    changed = await mark_sold(ad_id)
+
+    if not changed:
+        return False
+
+    # Получаем свежую запись после изменения статуса.
+    updated_ad = await get_ad(ad_id)
+
+    if not updated_ad:
+        return True
+
+    if bot_ref:
+        try:
+            await edit_ad_channel_post(
+                bot_ref,
+                updated_ad,
+                "🔴 ПРОДАН",
+            )
+        except Exception:
+            # Заказ уже выполнен и товар уже sold.
+            # Ошибка редактирования поста не должна
+            # ломать завершение заказа.
+            pass
+
+    return True
 
 
 @router.callback_query(
@@ -165,6 +254,7 @@ async def action(
                 2,
             )
         )
+
     except ValueError:
         await callback.answer(
             "❌ Ошибка заказа",
@@ -199,9 +289,7 @@ async def action(
             callback.from_user.id,
         )
 
-        updated = await get_order(
-            number
-        )
+        updated = await get_order(number)
 
         if updated:
             await update_order_message(
@@ -219,6 +307,7 @@ async def action(
                         "📦 Заказ передан в выполнение."
                     ),
                 )
+
             except Exception:
                 pass
 
@@ -246,9 +335,11 @@ async def action(
             callback.from_user.id,
         )
 
-        updated = await get_order(
-            number
-        )
+        # Если это покупка товара маркетплейса —
+        # автоматически переводим объявление в sold.
+        await complete_marketplace_ad(order)
+
+        updated = await get_order(number)
 
         if updated:
             await update_order_message(
@@ -266,6 +357,7 @@ async def action(
                         "Спасибо за покупку."
                     ),
                 )
+
             except Exception:
                 pass
 
@@ -297,9 +389,7 @@ async def action(
             callback.from_user.id,
         )
 
-        updated = await get_order(
-            number
-        )
+        updated = await get_order(number)
 
         if updated:
             await update_order_message(
@@ -317,6 +407,7 @@ async def action(
                         "Если это ошибка, обратитесь к администрации."
                     ),
                 )
+
             except Exception:
                 pass
 
