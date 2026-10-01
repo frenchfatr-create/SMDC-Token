@@ -1,7 +1,4 @@
-from aiogram.types import (
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
-)
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 
 def admin_kb(ad_id):
@@ -131,7 +128,7 @@ def watermark_kb():
     )
 
 
-def order_admin_kb(number, status):
+def order_admin_kb(number, status="receipt_sent"):
     if status == "receipt_sent":
         return InlineKeyboardMarkup(
             inline_keyboard=[
@@ -168,7 +165,9 @@ def order_admin_kb(number, status):
             ]
         )
 
-    return InlineKeyboardMarkup(inline_keyboard=[])
+    return InlineKeyboardMarkup(
+        inline_keyboard=[]
+    )
 
 
 def product_manage_kb(product_number):
