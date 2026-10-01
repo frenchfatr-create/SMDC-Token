@@ -32,6 +32,8 @@ from db.orders import (
     set_payment_method,
 )
 
+from db.ads import get_ad
+
 from keyboards.sm import (
     sm_menu,
     pack_kb,
@@ -53,6 +55,60 @@ def set_bot(bot):
     bot_ref = bot
 
 
+def marketplace_payment_methods(payment):
+    if payment == "card":
+        return ("card",)
+
+    if payment == "stars":
+        return ("stars",)
+
+    if payment == "both":
+        return ("card", "stars")
+
+    # На случай старых объявлений.
+    return ("card",)
+
+
+def marketplace_price(ad, method):
+    if method == "stars":
+        return int(ad["price_stars"] or 0)
+
+    return float(
+        ad["price_rub"]
+        or ad["price"]
+        or 0
+    )
+
+
+def marketplace_price_text(ad):
+    parts = []
+
+    rub = float(
+        ad["price_rub"]
+        or ad["price"]
+        or 0
+    )
+
+    stars = int(
+        ad["price_stars"]
+        or 0
+    )
+
+    payment = ad["payment"]
+
+    if payment in ("card", "both") and rub > 0:
+        parts.append(
+            f"{rub:g} ₽"
+        )
+
+    if payment in ("stars", "both") and stars > 0:
+        parts.append(
+            f"{stars} ⭐"
+        )
+
+    return " / ".join(parts) or "Цена не указана"
+
+
 async def _new(
     c,
     state,
@@ -62,6 +118,7 @@ async def _new(
     rub=0,
     stars=0,
     details="",
+    payment_methods=None,
 ):
     n = await create_order(
         user_id=c.from_user.id,
@@ -77,8 +134,14 @@ async def _new(
     )
 
     await state.clear()
-    await state.update_data(order_number=n)
-    await state.set_state(OrderFlow.payment)
+
+    await state.update_data(
+        order_number=n
+    )
+
+    await state.set_state(
+        OrderFlow.payment
+    )
 
     price = (
         f"{rub:g} ₽"
@@ -92,44 +155,125 @@ async def _new(
         f"📦 {escape(name)}\n"
         f"💰 К оплате: <b>{price}</b>\n\n"
         f"Выберите способ оплаты:",
-        reply_markup=payment_kb(),
+        reply_markup=payment_kb(
+            payment_methods
+        ),
     )
 
     await c.answer()
 
 
-@router.callback_query(F.data.startswith("sm_order:ad:"))
+@router.callback_query(
+    F.data.startswith("sm_order:ad:")
+)
 async def order_ad(c, state):
     try:
-        i = int(c.data.split(":")[-1])
+        ad_id = int(
+            c.data.split(":")[-1]
+        )
+
     except Exception:
         await c.answer(
-            "Ошибка товара",
+            "❌ Ошибка товара",
             show_alert=True,
         )
         return
 
-    from db.ads import get_ad
+    ad = await get_ad(ad_id)
 
-    ad = await get_ad(i)
-
-    if not ad or ad["status"] != "published":
+    if not ad:
         await c.answer(
-            "Товар больше недоступен",
+            "❌ Товар не найден.",
             show_alert=True,
         )
         return
 
-    await _new(
-        c,
-        state,
-        "marketplace",
-        f'Товар #{ad["product_number"]}: {ad["game"]}',
-        1,
-        float(ad["price"]),
-        0,
-        f'Товар #{ad["product_number"]}; продавец ID {ad["user_id"]}',
+    if ad["status"] != "published":
+        await c.answer(
+            "❌ Товар больше недоступен.",
+            show_alert=True,
+        )
+        return
+
+    payment = ad["payment"]
+
+    methods = marketplace_payment_methods(
+        payment
     )
+
+    rub = float(
+        ad["price_rub"]
+        or ad["price"]
+        or 0
+    )
+
+    stars = int(
+        ad["price_stars"]
+        or 0
+    )
+
+    # Защита от нулевой цены.
+    if payment in ("card", "both") and rub <= 0:
+        if payment == "card":
+            await c.answer(
+                "❌ У товара не указана цена в рублях.",
+                show_alert=True,
+            )
+            return
+
+    if payment in ("stars", "both") and stars <= 0:
+        if payment == "stars":
+            await c.answer(
+                "❌ У товара не указана цена в Stars.",
+                show_alert=True,
+            )
+            return
+
+    # Для both до выбора оплаты создаём заказ
+    # с реальными ценами, а не с нулём.
+    n = await create_order(
+        user_id=c.from_user.id,
+        username=c.from_user.username,
+        game=ad["game"],
+        product_type="marketplace",
+        product_name=(
+            f"Товар #{ad['product_number']}: "
+            f"{ad['game']}"
+        ),
+        quantity=1,
+        amount_rub=rub,
+        amount_stars=stars,
+        details=f"marketplace_ad_id={ad_id}",
+        payment_method="card",
+    )
+
+    await state.clear()
+
+    await state.update_data(
+        order_number=n,
+        marketplace_ad_id=ad_id,
+    )
+
+    await state.set_state(
+        OrderFlow.payment
+    )
+
+    price_text = marketplace_price_text(
+        ad
+    )
+
+    await c.message.edit_text(
+        f"🧾 <b>Заказ {n}</b>\n\n"
+        f"📦 Товар #{ad['product_number']}\n"
+        f"🎮 {escape(ad['game'])}\n"
+        f"💰 К оплате: <b>{escape(price_text)}</b>\n\n"
+        "Выберите способ оплаты:",
+        reply_markup=payment_kb(
+            methods
+        ),
+    )
+
+    await c.answer()
 
 
 @router.callback_query(F.data == "sm_menu")
@@ -154,7 +298,10 @@ async def rub(c):
             "smrub",
             [
                 (
-                    f"{r} ₽ → {t:,}".replace(",", " "),
+                    f"{r} ₽ → {t:,}".replace(
+                        ",",
+                        " ",
+                    ),
                     str(r),
                 )
                 for r, t in RUB_PACKS
@@ -165,13 +312,19 @@ async def rub(c):
     await c.answer()
 
 
-@router.callback_query(F.data.startswith("smrub:"))
+@router.callback_query(
+    F.data.startswith("smrub:")
+)
 async def rub_pick(c, state):
     x = c.data.split(":")[1]
 
     if x == "custom":
         await state.clear()
-        await state.set_state(OrderFlow.quantity)
+
+        await state.set_state(
+            OrderFlow.quantity
+        )
+
         await state.update_data(
             product_type="tokens_rub"
         )
@@ -195,8 +348,10 @@ async def rub_pick(c, state):
         c,
         state,
         "tokens_rub",
-        f"{rub_tokens(amount):,}".replace(",", " ")
-        + " токенов",
+        f"{rub_tokens(amount):,}".replace(
+            ",",
+            " ",
+        ) + " токенов",
         1,
         amount,
         0,
@@ -204,13 +359,20 @@ async def rub_pick(c, state):
     )
 
 
-@router.message(OrderFlow.quantity)
+@router.message(
+    OrderFlow.quantity
+)
 async def custom_amount(m, state):
     d = await state.get_data()
-    p = d.get("product_type")
+    product_type = d.get(
+        "product_type"
+    )
 
     try:
-        v = int((m.text or "").strip())
+        value = int(
+            (m.text or "").strip()
+        )
+
     except Exception:
         await m.answer(
             "❌ Введите целое число."
@@ -218,8 +380,8 @@ async def custom_amount(m, state):
         return
 
     try:
-        if p == "tokens_rub":
-            tok = rub_tokens(v)
+        if product_type == "tokens_rub":
+            tokens = rub_tokens(value)
 
             await state.clear()
 
@@ -227,12 +389,17 @@ async def custom_amount(m, state):
                 user_id=m.from_user.id,
                 username=m.from_user.username,
                 game="Super Mechs",
-                product_type=p,
-                product_name=f"{tok:,}".replace(",", " ")
-                + " токенов",
+                product_type=product_type,
+                product_name=(
+                    f"{tokens:,}".replace(
+                        ",",
+                        " ",
+                    )
+                    + " токенов"
+                ),
                 quantity=1,
-                amount_rub=v,
-                details=f"Сумма: {v} ₽",
+                amount_rub=value,
+                details=f"Сумма: {value} ₽",
                 payment_method="card",
             )
 
@@ -246,15 +413,18 @@ async def custom_amount(m, state):
 
             await m.answer(
                 f"🧾 <b>Заказ {n}</b>\n\n"
-                f"💰 {v} ₽ → "
-                f"{tok:,}".replace(",", " ")
+                f"💰 {value} ₽ → "
+                f"{tokens:,}".replace(
+                    ",",
+                    " ",
+                )
                 + " токенов\n\n"
                 "Выберите оплату:",
                 reply_markup=payment_kb(),
             )
 
-        elif p == "tokens_stars":
-            tok = star_tokens(v)
+        elif product_type == "tokens_stars":
+            tokens = star_tokens(value)
 
             await state.clear()
 
@@ -262,12 +432,17 @@ async def custom_amount(m, state):
                 user_id=m.from_user.id,
                 username=m.from_user.username,
                 game="Super Mechs",
-                product_type=p,
-                product_name=f"{tok:,}".replace(",", " ")
-                + " токенов",
+                product_type=product_type,
+                product_name=(
+                    f"{tokens:,}".replace(
+                        ",",
+                        " ",
+                    )
+                    + " токенов"
+                ),
                 quantity=1,
-                amount_stars=v,
-                details=f"Stars: {v}",
+                amount_stars=value,
+                details=f"Stars: {value}",
                 payment_method="stars",
             )
 
@@ -281,14 +456,18 @@ async def custom_amount(m, state):
 
             await m.answer(
                 f"🧾 <b>Заказ {n}</b>\n\n"
-                f"⭐ {v} Stars → "
-                f"{tok:,}".replace(",", " ")
+                f"⭐ {value} Stars → "
+                f"{tokens:,}".replace(
+                    ",",
+                    " ",
+                )
                 + " токенов\n\n"
-                "После оплаты отправьте чек/подтверждение сюда."
+                "После оплаты отправьте "
+                "чек/подтверждение сюда."
             )
 
-        elif p == "silver":
-            total = silver_total(v)
+        elif product_type == "silver":
+            total = silver_total(value)
 
             await state.clear()
 
@@ -296,11 +475,13 @@ async def custom_amount(m, state):
                 user_id=m.from_user.id,
                 username=m.from_user.username,
                 game="Super Mechs",
-                product_type=p,
-                product_name=f"{v} Silver Boxes",
-                quantity=v,
+                product_type=product_type,
+                product_name=(
+                    f"{value} Silver Boxes"
+                ),
+                quantity=value,
                 amount_rub=total,
-                details=f"Количество: {v}",
+                details=f"Количество: {value}",
                 payment_method="card",
             )
 
@@ -314,19 +495,23 @@ async def custom_amount(m, state):
 
             await m.answer(
                 f"🧾 <b>Заказ {n}</b>\n"
-                f"📦 {v} Silver Boxes\n"
+                f"📦 {value} Silver Boxes\n"
                 f"💰 {total:.2f} ₽\n\n"
                 "Выберите оплату:",
-                reply_markup=payment_kb(),
+                reply_markup=payment_kb(
+                    ("card",)
+                ),
             )
 
-    except ValueError as e:
+    except ValueError as error:
         await m.answer(
-            f"❌ {e}"
+            f"❌ {error}"
         )
 
 
-@router.callback_query(F.data == "sm:stars")
+@router.callback_query(
+    F.data == "sm:stars"
+)
 async def stars(c):
     await c.message.edit_text(
         "⭐ <b>ТОКЕНЫ ЗА STARS</b>\n\n"
@@ -335,10 +520,13 @@ async def stars(c):
             "smstars",
             [
                 (
-                    f"{s} ⭐ → {t:,}".replace(",", " "),
-                    str(s),
+                    f"{stars} ⭐ → {tokens:,}".replace(
+                        ",",
+                        " ",
+                    ),
+                    str(stars),
                 )
-                for s, t in STAR_PACKS
+                for stars, tokens in STAR_PACKS
             ],
         ),
     )
@@ -346,13 +534,18 @@ async def stars(c):
     await c.answer()
 
 
-@router.callback_query(F.data.startswith("smstars:"))
+@router.callback_query(
+    F.data.startswith("smstars:")
+)
 async def stars_pick(c, state):
     x = c.data.split(":")[1]
 
     if x == "custom":
         await state.clear()
-        await state.set_state(OrderFlow.quantity)
+
+        await state.set_state(
+            OrderFlow.quantity
+        )
 
         await state.update_data(
             product_type="tokens_stars"
@@ -365,22 +558,27 @@ async def stars_pick(c, state):
         await c.answer()
         return
 
-    v = int(x)
+    value = int(x)
 
     await _new(
         c,
         state,
         "tokens_stars",
-        f"{star_tokens(v):,}".replace(",", " ")
-        + " токенов",
+        f"{star_tokens(value):,}".replace(
+            ",",
+            " ",
+        ) + " токенов",
         1,
         0,
-        v,
-        f"Stars: {v}",
+        value,
+        f"Stars: {value}",
+        ("stars",),
     )
 
 
-@router.callback_query(F.data == "sm:boost")
+@router.callback_query(
+    F.data == "sm:boost"
+)
 async def boost(c):
     await c.message.edit_text(
         "📈 <b>НАКРУТКА АКЦИЙ</b>\n\n"
@@ -388,17 +586,17 @@ async def boost(c):
         "10 = 80 ₽\n"
         "15 = 130 ₽\n"
         "20 = 180 ₽\n\n"
-        "⚠️ Акция должна быть активна и "
-        "покупаться за токены. "
+        "⚠️ Акция должна быть активна "
+        "и покупаться за токены. "
         "После начала накрутки возврата нет.",
         reply_markup=pack_kb(
             "smboost",
             [
                 (
-                    f"{q} покупок → {p} ₽",
-                    str(q),
+                    f"{quantity} покупок → {price} ₽",
+                    str(quantity),
                 )
-                for q, p in BOOST_PACKS
+                for quantity, price in BOOST_PACKS
             ],
             custom=False,
         ),
@@ -407,26 +605,37 @@ async def boost(c):
     await c.answer()
 
 
-@router.callback_query(F.data.startswith("smboost:"))
+@router.callback_query(
+    F.data.startswith("smboost:")
+)
 async def boost_pick(c, state):
-    q = int(c.data.split(":")[1])
-    price = dict(BOOST_PACKS)[q]
+    quantity = int(
+        c.data.split(":")[1]
+    )
+
+    price = dict(
+        BOOST_PACKS
+    )[quantity]
 
     await _new(
         c,
         state,
         "boost",
-        f"Накрутка {q} покупок",
-        q,
+        f"Накрутка {quantity} покупок",
+        quantity,
         price,
         0,
         "Условия подтверждены пользователем перед заказом.",
+        ("card",),
     )
 
 
-@router.callback_query(F.data == "sm:silver")
+@router.callback_query(
+    F.data == "sm:silver"
+)
 async def silver(c, state):
     await state.clear()
+
     await state.set_state(
         OrderFlow.quantity
     )
@@ -444,7 +653,9 @@ async def silver(c, state):
     await c.answer()
 
 
-@router.callback_query(F.data == "sm:fuel")
+@router.callback_query(
+    F.data == "sm:fuel"
+)
 async def fuel(c, state):
     await _new(
         c,
@@ -455,32 +666,74 @@ async def fuel(c, state):
         100,
         0,
         "999 ед. топлива",
+        ("card",),
     )
 
 
-@router.callback_query(F.data.startswith("sm_pay:"))
+@router.callback_query(
+    F.data.startswith("sm_pay:")
+)
 async def choose_pay(c, state):
-    d = await state.get_data()
+    data = await state.get_data()
 
     method = c.data.split(":")[1]
-    n = d.get("order_number")
+    number = data.get(
+        "order_number"
+    )
 
-    if not n:
+    if not number:
         await c.answer(
-            "Заказ не найден",
+            "❌ Заказ не найден",
             show_alert=True,
         )
         return
 
+    order = await get_order(
+        number
+    )
+
+    if not order:
+        await c.answer(
+            "❌ Заказ не найден",
+            show_alert=True,
+        )
+        return
+
+    # Для marketplace проверяем,
+    # что выбранная валюта действительно доступна.
+    if order["product_type"] == "marketplace":
+        if method == "card" and float(
+            order["amount_rub"] or 0
+        ) <= 0:
+            await c.answer(
+                "❌ Для этого товара нет цены в ₽.",
+                show_alert=True,
+            )
+            return
+
+        if method == "stars" and int(
+            order["amount_stars"] or 0
+        ) <= 0:
+            await c.answer(
+                "❌ Для этого товара нет цены в ⭐.",
+                show_alert=True,
+            )
+            return
+
+    await set_payment_method(
+        number,
+        method,
+    )
+
     if method == "stars":
-        await set_payment_method(
-            n,
-            "stars",
+        amount = int(
+            order["amount_stars"] or 0
         )
 
         await c.message.edit_text(
-            f"⭐ <b>Заказ {n}</b>\n\n"
-            "После оплаты Stars отправьте сюда "
+            f"⭐ <b>Заказ {number}</b>\n\n"
+            f"К оплате: <b>{amount} ⭐</b>\n\n"
+            "После оплаты отправьте сюда "
             "скриншот/чек."
         )
 
@@ -489,9 +742,8 @@ async def choose_pay(c, state):
         )
 
     else:
-        await set_payment_method(
-            n,
-            "card",
+        amount = float(
+            order["amount_rub"] or 0
         )
 
         details = await get_setting(
@@ -508,7 +760,8 @@ async def choose_pay(c, state):
         )
 
         await c.message.edit_text(
-            f"💳 <b>Оплата заказа {n}</b>\n\n"
+            f"💳 <b>Оплата заказа {number}</b>\n\n"
+            f"💰 К оплате: <b>{amount:g} ₽</b>\n\n"
             f"<b>Реквизиты:</b>\n"
             f"{shown}\n\n"
             "После оплаты отправьте сюда "
@@ -526,11 +779,14 @@ async def choose_pay(c, state):
     OrderFlow.receipt,
     F.photo,
 )
-async def receipt_photo(m, state):
+async def receipt_photo(
+    message,
+    state,
+):
     await _receipt(
-        m,
+        message,
         state,
-        m.photo[-1].file_id,
+        message.photo[-1].file_id,
         "photo",
     )
 
@@ -539,60 +795,121 @@ async def receipt_photo(m, state):
     OrderFlow.receipt,
     F.document,
 )
-async def receipt_doc(m, state):
+async def receipt_doc(
+    message,
+    state,
+):
     await _receipt(
-        m,
+        message,
         state,
-        m.document.file_id,
+        message.document.file_id,
         "document",
     )
 
 
 async def _receipt(
-    m,
+    message,
     state,
     file_id,
     file_type,
 ):
-    d = await state.get_data()
+    data = await state.get_data()
 
-    n = d.get("order_number")
+    number = data.get(
+        "order_number"
+    )
 
-    o = (
-        await get_order(n)
-        if n
+    order = (
+        await get_order(number)
+        if number
         else None
     )
 
-    if not o:
+    if not order:
         await state.clear()
 
-        await m.answer(
+        await message.answer(
             "❌ Заказ не найден."
         )
 
         return
 
     await set_receipt(
-        n,
+        number,
         file_id,
         file_type,
     )
 
     await state.clear()
 
+    # Получаем свежий заказ со статусом receipt_sent.
+    order = await get_order(
+        number
+    )
+
     if bot_ref and RECEIPT_CHAT_ID:
-        text = (
-            f"🧾 <b>НОВЫЙ ЧЕК • {n}</b>\n\n"
-            f"👤 @{escape(m.from_user.username or 'не указан')} "
-            f"(<code>{m.from_user.id}</code>)\n"
-            f"📦 {escape(o['product_name'])}\n"
-            f"💰 {o['amount_rub']:.2f} ₽"
-            + (
-                f"\n⭐ {o['amount_stars']}"
-                if o["amount_stars"]
-                else ""
+        rub = float(
+            order["amount_rub"] or 0
+        )
+
+        stars = int(
+            order["amount_stars"] or 0
+        )
+
+        price_parts = []
+
+        if rub > 0:
+            price_parts.append(
+                f"{rub:g} ₽"
             )
+
+        if stars > 0:
+            price_parts.append(
+                f"{stars} ⭐"
+            )
+
+        price = (
+            " / ".join(price_parts)
+            or "—"
+        )
+
+        seller_text = ""
+
+        # Для marketplace достаём продавца.
+        details = order["details"] or ""
+
+        if details.startswith(
+            "marketplace_ad_id="
+        ):
+            try:
+                ad_id = int(
+                    details.split("=")[1]
+                    .split(";")[0]
+                )
+
+                ad = await get_ad(
+                    ad_id
+                )
+
+                if ad:
+                    seller_text = (
+                        f"\n👤 Продавец: "
+                        f"@{escape(ad['username'] or 'не указан')} "
+                        f"(<code>{ad['user_id']}</code>)"
+                    )
+            except Exception:
+                pass
+
+        text = (
+            f"🧾 <b>НОВЫЙ ЧЕК • {number}</b>\n\n"
+            f"👤 Покупатель: "
+            f"@{escape(message.from_user.username or 'не указан')} "
+            f"(<code>{message.from_user.id}</code>)\n"
+            f"📦 {escape(order['product_name'])}\n"
+            f"💰 Сумма: <b>{escape(price)}</b>"
+            f"{seller_text}\n\n"
+            f"📊 Статус: "
+            f"<b>{ORDER_STATUS_NAMES['receipt_sent']}</b>"
         )
 
         if file_type == "photo":
@@ -600,26 +917,35 @@ async def _receipt(
                 RECEIPT_CHAT_ID,
                 file_id,
                 caption=text,
-                reply_markup=order_admin_kb(n),
+                reply_markup=order_admin_kb(
+                    number,
+                    "receipt_sent",
+                ),
             )
+
         else:
             await bot_ref.send_document(
                 RECEIPT_CHAT_ID,
                 file_id,
                 caption=text,
-                reply_markup=order_admin_kb(n),
+                reply_markup=order_admin_kb(
+                    number,
+                    "receipt_sent",
+                ),
             )
 
-    await m.answer(
+    await message.answer(
         f"✅ <b>Чек принят.</b>\n\n"
-        f"Ваш номер: <code>{n}</code>\n"
+        f"Заказ: <code>{number}</code>\n"
         f"Статус: 🧾 Чек отправлен.\n\n"
-        "Сохраните номер заказа.",
+        "Ожидайте подтверждения оплаты.",
         reply_markup=sm_menu(),
     )
 
 
-@router.callback_query(F.data == "my_orders")
+@router.callback_query(
+    F.data == "my_orders"
+)
 async def my_orders(c):
     rows = await get_user_orders(
         c.from_user.id
@@ -635,7 +961,7 @@ async def my_orders(c):
         await c.answer()
         return
 
-    text = (
+    body = (
         "🧾 <b>МОИ ЗАКАЗЫ</b>\n\n"
         + "\n".join(
             f"<code>{r['order_number']}</code> — "
@@ -646,7 +972,7 @@ async def my_orders(c):
     )
 
     await c.message.edit_text(
-        text,
+        body,
         reply_markup=sm_menu(),
     )
 
