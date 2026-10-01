@@ -21,6 +21,7 @@ from handlers.admin import (
     manage_product,
     rating,
     complaints,
+    referrals,
 )
 
 from middlewares.subscription import SubscriptionMiddleware
@@ -134,6 +135,7 @@ async def main():
     # в оригинальный admin/router.py.
     dp.include_router(blocks.router)
     dp.include_router(manage_product.router)
+    dp.include_router(referrals.router)
 
     logging.info(
         "Super Mechs Market Bot запущен"
