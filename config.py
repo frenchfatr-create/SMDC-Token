@@ -13,6 +13,7 @@ PAYMENT_DETAILS = os.getenv("PAYMENT_DETAILS", "Не настроено").strip(
 SUPPORT_CONTACT = os.getenv("SUPPORT_CONTACT", "@QuietFrench").strip()
 AD_EXPIRY_DAYS = int(os.getenv("AD_EXPIRY_DAYS", "0") or 0)
 SELL_COOLDOWN_SECONDS = int(os.getenv("SELL_COOLDOWN_SECONDS", "30") or 30)
+IMPORT_CHANNELS = os.getenv("IMPORT_CHANNELS", PUBLIC_CHANNEL).strip()
 
 try:
     ADMIN_IDS = {int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()}
