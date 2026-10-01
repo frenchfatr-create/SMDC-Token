@@ -47,4 +47,17 @@ async def init_db():
         await db.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_logs_created ON logs(created_at)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_complaints_status ON complaints(status)")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS channel_imports(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                ad_id INTEGER NOT NULL,
+                imported_at TEXT NOT NULL,
+                UNIQUE(channel_id, message_id)
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_channel_imports_ad ON channel_imports(ad_id)"
+        )
         await db.commit()
