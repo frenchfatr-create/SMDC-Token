@@ -14,6 +14,7 @@ from . import (
     stats,
     user_search,
     logs,
+    forward_import,
 )
 
 router = Router()
@@ -33,5 +34,6 @@ for module in (
     stats,
     user_search,
     logs,
+    forward_import,
 ):
     router.include_router(module.router)
