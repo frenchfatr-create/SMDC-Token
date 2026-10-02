@@ -29,7 +29,7 @@ async def receive(m,state):
     if m.from_user.id not in ADMIN_IDS: await state.clear(); return
     d=await state.get_data(); i=int(d["ad_id"]); ad=await get_ad(i)
     if not ad: await state.clear(); await m.answer("❌ Объявление не найдено."); return
-    media=json.loads(ad["media_json"] or "[]"); media.insert(0,{"type":"photo","file_id":m.photo[-1].file_id}); media=media[:10]
+    media=json.loads(ad["media_json"] or "[]"); media.insert(0,{"type":"photo","file_id":m.photo[-1].file_id}); media=media[:3]
     await update_ad_media(i,media)
     if ad["status"]=="published" and bot_ref and PUBLIC_CHANNEL and ad["published_message_id"]:
         try:
