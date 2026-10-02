@@ -11,12 +11,14 @@ RUB_PACKS = [
 
 
 def rub_tokens(amount: int) -> int:
+    amount = int(amount)
+
     if amount < 50:
         raise ValueError(
             "Минимальная сумма — 50 ₽"
         )
 
-    return int(amount) * 150
+    return amount * 150
 
 
 # ============================================================
@@ -36,26 +38,26 @@ STAR_PACKS = [
 
 def star_tokens(stars: int) -> int:
     """
-    Расчёт токенов за Stars.
+    Расчёт количества Super Mechs токенов за Telegram Stars.
 
-    До 100 ⭐:
-        1 ⭐ = 300 токенов
+    Фиксированные наборы:
 
-    После 100 ⭐:
-        каждая дополнительная ⭐ = 100 токенов
+        25  ⭐ → 7 500 токенов
+        50  ⭐ → 15 000 токенов
+        75  ⭐ → 22 500 токенов
+        100 ⭐ → 30 000 токенов
+        175 ⭐ → 37 500 токенов
+        250 ⭐ → 45 000 токенов
+        300 ⭐ → 50 000 токенов
 
-    Поэтому:
+    Для значений, которых нет в STAR_PACKS:
 
-    25  ⭐ = 7 500
-    50  ⭐ = 15 000
-    75  ⭐ = 22 500
-    100 ⭐ = 30 000
-    175 ⭐ = 37 500
-    250 ⭐ = 45 000
-    300 ⭐ = 50 000
+        до 100 ⭐:
+            1 ⭐ = 300 токенов
 
-    Можно вводить и другие значения,
-    например 125, 200, 300, 500 и т.д.
+        после 100 ⭐:
+            30 000 + 100 токенов за каждую
+            звезду сверх 100.
     """
 
     stars = int(stars)
@@ -65,9 +67,16 @@ def star_tokens(stars: int) -> int:
             "Количество Stars должно быть больше 0."
         )
 
+    # Сначала проверяем готовые наборы.
+    for pack_stars, tokens in STAR_PACKS:
+        if stars == pack_stars:
+            return tokens
+
+    # Значения до 100 Stars.
     if stars <= 100:
         return stars * 300
 
+    # Значения больше 100 Stars.
     return 30000 + (
         stars - 100
     ) * 100
@@ -92,6 +101,8 @@ BOOST_PACKS = [
 def silver_total(
     quantity: int
 ) -> Decimal:
+
+    quantity = int(quantity)
 
     if quantity < 10:
         raise ValueError(
