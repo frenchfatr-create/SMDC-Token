@@ -9,102 +9,119 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 
-# =========================================================
+# ============================================================
 # НАСТРОЙКИ
-# =========================================================
+# ============================================================
 
 WATERMARK_OPACITY = 150
-WATERMARK_MARGIN = 20
 
 
-# =========================================================
-# ВСПОМОГАТЕЛЬНОЕ
-# =========================================================
+# ============================================================
+# ОТКРЫТИЕ ИЗОБРАЖЕНИЯ
+# ============================================================
 
-def _open_image(data: bytes):
-    image = Image.open(io.BytesIO(data))
+def _open_image(data: bytes) -> Image.Image:
+    image = Image.open(
+        io.BytesIO(data)
+    )
 
-    # Нужен RGBA для нормальной прозрачности.
     return image.convert("RGBA")
 
+
+# ============================================================
+# ПОДГОТОВКА WATERMARK
+# ============================================================
 
 def _prepare_watermark(
     watermark_data: bytes,
     max_width: int,
     max_height: int,
-):
-    """
-    Загружает водяной знак и подгоняет его размер.
-    Поддерживает PNG/WebP/JPEG и другие форматы,
-    которые умеет Pillow.
-    """
+) -> Image.Image:
 
-    watermark = _open_image(watermark_data)
+    watermark = _open_image(
+        watermark_data
+    )
 
-    # Если водяной знак огромный — уменьшаем.
     watermark.thumbnail(
-        (max_width, max_height),
+        (
+            max_width,
+            max_height,
+        ),
         Image.Resampling.LANCZOS,
     )
 
     # Настраиваем прозрачность.
-    alpha = watermark.getchannel("A")
+    alpha = watermark.getchannel(
+        "A"
+    )
 
     alpha = alpha.point(
         lambda value: int(
-            value * WATERMARK_OPACITY / 255
+            value
+            * WATERMARK_OPACITY
+            / 255
         )
     )
 
-    watermark.putalpha(alpha)
+    watermark.putalpha(
+        alpha
+    )
 
     return watermark
 
+
+# ============================================================
+# ЦЕНТР WATERMARK
+# ============================================================
 
 def _center_position(
     base: Image.Image,
     watermark: Image.Image,
 ):
     x = (
-        base.width - watermark.width
+        base.width
+        - watermark.width
     ) // 2
 
     y = (
-        base.height - watermark.height
+        base.height
+        - watermark.height
     ) // 2
 
     return x, y
 
 
-# =========================================================
-# ВОДЯНОЙ ЗНАК НА ФОТО
-# =========================================================
+# ============================================================
+# WATERMARK НА ФОТО
+# ============================================================
 
 def add_watermark_to_image(
     image_data: bytes,
     watermark_data: bytes,
 ) -> bytes:
     """
-    Накладывает водяной знак строго по центру изображения.
+    Накладывает watermark по центру изображения.
 
-    Возвращает готовое изображение в JPEG.
+    Возвращает JPEG bytes.
     """
 
     base = _open_image(
         image_data
     )
 
-    # Водяной знак занимает максимум
-    # примерно 45% ширины и 25% высоты.
     watermark = _prepare_watermark(
         watermark_data,
         max_width=max(
             1,
-            int(base.width * 0.45),
+            int(
+                base.width * 0.45
+            ),
         ),
         max_height=max(
             1,
-            int(base.height * 0.25),
+            int(
+                base.height * 0.25
+            ),
         ),
     )
 
@@ -115,13 +132,17 @@ def add_watermark_to_image(
 
     base.alpha_composite(
         watermark,
-        (x, y),
+        (
+            x,
+            y,
+        ),
     )
 
     output = io.BytesIO()
 
-    # Telegram нормально работает с JPEG.
-    base.convert("RGB").save(
+    base.convert(
+        "RGB"
+    ).save(
         output,
         format="JPEG",
         quality=95,
@@ -133,18 +154,44 @@ def add_watermark_to_image(
     return output.getvalue()
 
 
-# =========================================================
-# ВОДЯНОЙ ЗНАК НА ВИДЕО
-# =========================================================
+# ============================================================
+# СТАРЫЙ ИНТЕРФЕЙС
+# ============================================================
+#
+# ЭТУ ФУНКЦИЮ ИСПОЛЬЗУЕТ:
+#
+# handlers/admin/replace_photo.py
+#
+# Поэтому её обязательно оставляем.
+# ============================================================
+
+def process_photo_with_watermark(
+    image_data: bytes,
+    watermark_data: bytes,
+) -> bytes:
+    """
+    Совместимость со старым
+    handlers/admin/replace_photo.py.
+    """
+
+    return add_watermark_to_image(
+        image_data,
+        watermark_data,
+    )
+
+
+# ============================================================
+# WATERMARK НА ВИДЕО
+# ============================================================
 
 async def add_watermark_to_video(
     video_data: bytes,
     watermark_data: bytes,
 ) -> bytes:
     """
-    Накладывает водяной знак по центру видео.
+    Накладывает watermark по центру видео.
 
-    Требует ffmpeg, установленный на BotHost.
+    Для обработки используется ffmpeg.
     """
 
     video_file = None
@@ -152,61 +199,12 @@ async def add_watermark_to_video(
     output_file = None
 
     try:
-        # ---------------------------------------------
-        # Временные файлы
-        # ---------------------------------------------
-
-        with tempfile.NamedTemporaryFile(
-            suffix=".mp4",
-            delete=False,
-        ) as f:
-            f.write(video_data)
-            video_file = f.name
-
-        with tempfile.NamedTemporaryFile(
-            suffix=".png",
-            delete=False,
-        ) as f:
-            f.write(watermark_data)
-            watermark_file = f.name
-
-        output_file = tempfile.mktemp(
-            suffix=".mp4"
-        )
-
-        # ---------------------------------------------
-        # Размер водяного знака
-        # ---------------------------------------------
-
-        watermark_image = _open_image(
-            watermark_data
-        )
-
-        # Для видео делаем watermark
-        # умеренного размера.
-        watermark_image.thumbnail(
-            (700, 400),
-            Image.Resampling.LANCZOS,
-        )
-
-        # Сохраняем подготовленный PNG.
-        prepared_watermark = tempfile.mktemp(
-            suffix=".png"
-        )
-
-        watermark_image.save(
-            prepared_watermark,
-            "PNG",
-        )
-
-        watermark_file = prepared_watermark
-
-        # ---------------------------------------------
-        # FFmpeg
-        # ---------------------------------------------
-
         import asyncio
         import shutil
+
+        # ----------------------------------------------------
+        # Проверяем ffmpeg
+        # ----------------------------------------------------
 
         ffmpeg = shutil.which(
             "ffmpeg"
@@ -217,57 +215,129 @@ async def add_watermark_to_video(
                 "ffmpeg не найден в системе"
             )
 
-        process = await asyncio.create_subprocess_exec(
-            ffmpeg,
-            "-y",
+        # ----------------------------------------------------
+        # Исходное видео
+        # ----------------------------------------------------
 
-            "-i",
-            video_file,
+        with tempfile.NamedTemporaryFile(
+            suffix=".mp4",
+            delete=False,
+        ) as f:
 
-            "-i",
-            watermark_file,
+            f.write(
+                video_data
+            )
 
-            "-filter_complex",
-            (
-                "[1:v]format=rgba,"
-                "colorchannelmixer=aa=0.59[wm];"
-                "[0:v][wm]"
-                "overlay="
-                "(main_w-overlay_w)/2:"
-                "(main_h-overlay_h)/2:"
-                "shortest=1"
-            ),
+            video_file = f.name
 
-            "-map",
-            "0:v:0",
+        # ----------------------------------------------------
+        # Watermark
+        # ----------------------------------------------------
 
-            "-map",
-            "0:a?",
-
-            "-c:v",
-            "libx264",
-
-            "-preset",
-            "veryfast",
-
-            "-crf",
-            "23",
-
-            "-c:a",
-            "copy",
-
-            "-movflags",
-            "+faststart",
-
-            output_file,
-
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        watermark_image = _open_image(
+            watermark_data
         )
 
-        stdout, stderr = await process.communicate()
+        watermark_image.thumbnail(
+            (
+                700,
+                400,
+            ),
+            Image.Resampling.LANCZOS,
+        )
+
+        prepared_watermark = tempfile.mktemp(
+            suffix=".png"
+        )
+
+        watermark_image.save(
+            prepared_watermark,
+            "PNG",
+        )
+
+        watermark_file = (
+            prepared_watermark
+        )
+
+        # ----------------------------------------------------
+        # Результат
+        # ----------------------------------------------------
+
+        output_file = tempfile.mktemp(
+            suffix=".mp4"
+        )
+
+        # ----------------------------------------------------
+        # FFmpeg
+        # ----------------------------------------------------
+
+        process = (
+            await asyncio.create_subprocess_exec(
+                ffmpeg,
+
+                "-y",
+
+                "-i",
+                video_file,
+
+                "-i",
+                watermark_file,
+
+                "-filter_complex",
+
+                (
+                    "[1:v]"
+                    "format=rgba,"
+                    "colorchannelmixer="
+                    "aa=0.59"
+                    "[wm];"
+
+                    "[0:v][wm]"
+                    "overlay="
+                    "(main_w-overlay_w)/2:"
+                    "(main_h-overlay_h)/2:"
+                    "shortest=1"
+                ),
+
+                "-map",
+                "0:v:0",
+
+                "-map",
+                "0:a?",
+
+                "-c:v",
+                "libx264",
+
+                "-preset",
+                "veryfast",
+
+                "-crf",
+                "23",
+
+                "-c:a",
+                "copy",
+
+                "-movflags",
+                "+faststart",
+
+                output_file,
+
+                stdout=(
+                    asyncio.subprocess.PIPE
+                ),
+
+                stderr=(
+                    asyncio.subprocess.PIPE
+                ),
+            )
+        )
+
+        stdout, stderr = (
+            await process.communicate()
+        )
 
         if process.returncode != 0:
+
             logger.error(
                 "FFmpeg error: %s",
                 stderr.decode(
@@ -280,23 +350,29 @@ async def add_watermark_to_video(
                 "FFmpeg не смог обработать видео"
             )
 
-        # ---------------------------------------------
-        # Результат
-        # ---------------------------------------------
+        # ----------------------------------------------------
+        # Читаем результат
+        # ----------------------------------------------------
 
         with open(
             output_file,
             "rb",
         ) as f:
+
             result = f.read()
+
+        if not result:
+            raise RuntimeError(
+                "FFmpeg вернул пустой файл"
+            )
 
         return result
 
     finally:
 
-        # ---------------------------------------------
+        # ----------------------------------------------------
         # Удаляем временные файлы
-        # ---------------------------------------------
+        # ----------------------------------------------------
 
         for path in (
             video_file,
@@ -308,15 +384,19 @@ async def add_watermark_to_video(
                 path
                 and os.path.exists(path)
             ):
+
                 try:
-                    os.remove(path)
+                    os.remove(
+                        path
+                    )
+
                 except Exception:
                     pass
 
 
-# =========================================================
-# УНИВЕРСАЛЬНАЯ ФУНКЦИЯ
-# =========================================================
+# ============================================================
+# УНИВЕРСАЛЬНАЯ ОБРАБОТКА
+# ============================================================
 
 async def apply_watermark(
     media_type: str,
@@ -324,7 +404,7 @@ async def apply_watermark(
     watermark_data: bytes,
 ) -> bytes:
     """
-    Универсальная функция.
+    Универсальная функция для фото и видео.
 
     media_type:
         photo
@@ -334,17 +414,17 @@ async def apply_watermark(
     if media_type == "photo":
 
         return add_watermark_to_image(
-            media_data,
-            watermark_data,
+            image_data=media_data,
+            watermark_data=watermark_data,
         )
 
     if media_type == "video":
 
         return await add_watermark_to_video(
-            media_data,
-            watermark_data,
+            video_data=media_data,
+            watermark_data=watermark_data,
         )
 
-    # Неизвестный тип — возвращаем
-    # оригинальный файл.
+    # Неизвестный тип —
+    # возвращаем исходный файл.
     return media_data
