@@ -1,125 +1,350 @@
+import io
+import os
+import tempfile
 import logging
-from io import BytesIO
 
-from aiogram.types import BufferedInputFile
 from PIL import Image
 
-from db.settings import get_setting
+
+logger = logging.getLogger(__name__)
 
 
-async def process_photo_with_watermark(bot, file_id: str):
-    watermark_id = await get_setting("watermark_file_id", "")
+# =========================================================
+# НАСТРОЙКИ
+# =========================================================
 
-    if not watermark_id:
-        return file_id
+WATERMARK_OPACITY = 150
+WATERMARK_MARGIN = 20
+
+
+# =========================================================
+# ВСПОМОГАТЕЛЬНОЕ
+# =========================================================
+
+def _open_image(data: bytes):
+    image = Image.open(io.BytesIO(data))
+
+    # Нужен RGBA для нормальной прозрачности.
+    return image.convert("RGBA")
+
+
+def _prepare_watermark(
+    watermark_data: bytes,
+    max_width: int,
+    max_height: int,
+):
+    """
+    Загружает водяной знак и подгоняет его размер.
+    Поддерживает PNG/WebP/JPEG и другие форматы,
+    которые умеет Pillow.
+    """
+
+    watermark = _open_image(watermark_data)
+
+    # Если водяной знак огромный — уменьшаем.
+    watermark.thumbnail(
+        (max_width, max_height),
+        Image.Resampling.LANCZOS,
+    )
+
+    # Настраиваем прозрачность.
+    alpha = watermark.getchannel("A")
+
+    alpha = alpha.point(
+        lambda value: int(
+            value * WATERMARK_OPACITY / 255
+        )
+    )
+
+    watermark.putalpha(alpha)
+
+    return watermark
+
+
+def _center_position(
+    base: Image.Image,
+    watermark: Image.Image,
+):
+    x = (
+        base.width - watermark.width
+    ) // 2
+
+    y = (
+        base.height - watermark.height
+    ) // 2
+
+    return x, y
+
+
+# =========================================================
+# ВОДЯНОЙ ЗНАК НА ФОТО
+# =========================================================
+
+def add_watermark_to_image(
+    image_data: bytes,
+    watermark_data: bytes,
+) -> bytes:
+    """
+    Накладывает водяной знак строго по центру изображения.
+
+    Возвращает готовое изображение в JPEG.
+    """
+
+    base = _open_image(
+        image_data
+    )
+
+    # Водяной знак занимает максимум
+    # примерно 45% ширины и 25% высоты.
+    watermark = _prepare_watermark(
+        watermark_data,
+        max_width=max(
+            1,
+            int(base.width * 0.45),
+        ),
+        max_height=max(
+            1,
+            int(base.height * 0.25),
+        ),
+    )
+
+    x, y = _center_position(
+        base,
+        watermark,
+    )
+
+    base.alpha_composite(
+        watermark,
+        (x, y),
+    )
+
+    output = io.BytesIO()
+
+    # Telegram нормально работает с JPEG.
+    base.convert("RGB").save(
+        output,
+        format="JPEG",
+        quality=95,
+        optimize=True,
+    )
+
+    output.seek(0)
+
+    return output.getvalue()
+
+
+# =========================================================
+# ВОДЯНОЙ ЗНАК НА ВИДЕО
+# =========================================================
+
+async def add_watermark_to_video(
+    video_data: bytes,
+    watermark_data: bytes,
+) -> bytes:
+    """
+    Накладывает водяной знак по центру видео.
+
+    Требует ffmpeg, установленный на BotHost.
+    """
+
+    video_file = None
+    watermark_file = None
+    output_file = None
 
     try:
-        # Загружаем исходную фотографию
-        original_info = await bot.get_file(file_id)
+        # ---------------------------------------------
+        # Временные файлы
+        # ---------------------------------------------
 
-        original_data = BytesIO()
+        with tempfile.NamedTemporaryFile(
+            suffix=".mp4",
+            delete=False,
+        ) as f:
+            f.write(video_data)
+            video_file = f.name
 
-        await bot.download_file(
-            original_info.file_path,
-            destination=original_data,
+        with tempfile.NamedTemporaryFile(
+            suffix=".png",
+            delete=False,
+        ) as f:
+            f.write(watermark_data)
+            watermark_file = f.name
+
+        output_file = tempfile.mktemp(
+            suffix=".mp4"
         )
 
-        # Загружаем водяной знак.
-        # Это может быть:
-        # - PNG
-        # - JPG
-        # - WEBP
-        # - обычный статический Telegram-стикер
-        watermark_info = await bot.get_file(watermark_id)
+        # ---------------------------------------------
+        # Размер водяного знака
+        # ---------------------------------------------
 
-        watermark_data = BytesIO()
-
-        await bot.download_file(
-            watermark_info.file_path,
-            destination=watermark_data,
+        watermark_image = _open_image(
+            watermark_data
         )
 
-        # Открываем изображения через Pillow.
-        # Telegram-статические стикеры обычно приходят как WEBP.
-        base = Image.open(
-            BytesIO(original_data.getvalue())
-        ).convert("RGBA")
-
-        mark = Image.open(
-            BytesIO(watermark_data.getvalue())
-        ).convert("RGBA")
-
-        if mark.width <= 0 or mark.height <= 0:
-            return file_id
-
-        # Размер водяного знака —
-        # примерно 28% ширины исходной фотографии.
-        target_width = max(
-            1,
-            int(base.width * 0.28),
-        )
-
-        target_height = max(
-            1,
-            int(
-                mark.height
-                * target_width
-                / mark.width
-            ),
-        )
-
-        mark.thumbnail(
-            (target_width, target_height),
+        # Для видео делаем watermark
+        # умеренного размера.
+        watermark_image.thumbnail(
+            (700, 400),
             Image.Resampling.LANCZOS,
         )
 
-        # Делаем водяной знак полупрозрачным.
-        alpha = mark.getchannel("A").point(
-            lambda value: int(value * 0.55)
+        # Сохраняем подготовленный PNG.
+        prepared_watermark = tempfile.mktemp(
+            suffix=".png"
         )
 
-        mark.putalpha(alpha)
-
-        # Отступ от краёв.
-        margin = max(
-            10,
-            int(base.width * 0.025),
+        watermark_image.save(
+            prepared_watermark,
+            "PNG",
         )
 
-        position = (
-            base.width
-            - mark.width
-            - margin,
+        watermark_file = prepared_watermark
 
-            base.height
-            - mark.height
-            - margin,
+        # ---------------------------------------------
+        # FFmpeg
+        # ---------------------------------------------
+
+        import asyncio
+        import shutil
+
+        ffmpeg = shutil.which(
+            "ffmpeg"
         )
 
-        base.alpha_composite(
-            mark,
-            position,
+        if not ffmpeg:
+            raise RuntimeError(
+                "ffmpeg не найден в системе"
+            )
+
+        process = await asyncio.create_subprocess_exec(
+            ffmpeg,
+            "-y",
+
+            "-i",
+            video_file,
+
+            "-i",
+            watermark_file,
+
+            "-filter_complex",
+            (
+                "[1:v]format=rgba,"
+                "colorchannelmixer=aa=0.59[wm];"
+                "[0:v][wm]"
+                "overlay="
+                "(main_w-overlay_w)/2:"
+                "(main_h-overlay_h)/2:"
+                "shortest=1"
+            ),
+
+            "-map",
+            "0:v:0",
+
+            "-map",
+            "0:a?",
+
+            "-c:v",
+            "libx264",
+
+            "-preset",
+            "veryfast",
+
+            "-crf",
+            "23",
+
+            "-c:a",
+            "copy",
+
+            "-movflags",
+            "+faststart",
+
+            output_file,
+
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
 
-        # Telegram дальше получает обычный JPEG.
-        output = BytesIO()
+        stdout, stderr = await process.communicate()
 
-        base.convert("RGB").save(
-            output,
-            format="JPEG",
-            quality=92,
+        if process.returncode != 0:
+            logger.error(
+                "FFmpeg error: %s",
+                stderr.decode(
+                    "utf-8",
+                    errors="ignore",
+                )[-4000:],
+            )
+
+            raise RuntimeError(
+                "FFmpeg не смог обработать видео"
+            )
+
+        # ---------------------------------------------
+        # Результат
+        # ---------------------------------------------
+
+        with open(
+            output_file,
+            "rb",
+        ) as f:
+            result = f.read()
+
+        return result
+
+    finally:
+
+        # ---------------------------------------------
+        # Удаляем временные файлы
+        # ---------------------------------------------
+
+        for path in (
+            video_file,
+            watermark_file,
+            output_file,
+        ):
+
+            if (
+                path
+                and os.path.exists(path)
+            ):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+
+
+# =========================================================
+# УНИВЕРСАЛЬНАЯ ФУНКЦИЯ
+# =========================================================
+
+async def apply_watermark(
+    media_type: str,
+    media_data: bytes,
+    watermark_data: bytes,
+) -> bytes:
+    """
+    Универсальная функция.
+
+    media_type:
+        photo
+        video
+    """
+
+    if media_type == "photo":
+
+        return add_watermark_to_image(
+            media_data,
+            watermark_data,
         )
 
-        return BufferedInputFile(
-            output.getvalue(),
-            filename="watermarked.jpg",
+    if media_type == "video":
+
+        return await add_watermark_to_video(
+            media_data,
+            watermark_data,
         )
 
-    except Exception:
-        logging.exception(
-            "Ошибка обработки водяного знака"
-        )
-
-        # Если обработка не удалась,
-        # возвращаем исходный file_id.
-        return file_id
+    # Неизвестный тип — возвращаем
+    # оригинальный файл.
+    return media_data
