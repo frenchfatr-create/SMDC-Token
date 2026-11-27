@@ -1,27 +1,215 @@
+
 (() => {
   const tg = window.Telegram?.WebApp;
-  tg?.ready(); tg?.expand();
+  tg?.ready();
+  tg?.expand();
+
   const $ = (id) => document.getElementById(id);
-  const views = ['home','listings','profile','admin','form'];
-  const listings = [];
-  let selectedFiles = [];
-  const showToast = (message) => { const el=$('toast'); el.textContent=message; el.classList.add('show'); setTimeout(()=>el.classList.remove('show'),2600); };
-  function showView(name){ views.forEach(v=>$(v+'View')?.classList.toggle('hidden',v!==name)); document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.view===name)); }
-  document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>showView(t.dataset.view)));
-  $('startListing').onclick=()=>showView('form'); $('newListing').onclick=()=>showView('form'); $('closeForm').onclick=()=>showView('home');
-  const user=tg?.initDataUnsafe?.user;
-  if(user){ $('profileName').textContent=[user.first_name,user.last_name].filter(Boolean).join(' ')||'SMDC Seller'; $('profileId').textContent='Telegram ID: '+user.id; }
-  // Admin UI is intentionally not enabled from client-side data. Backend must authorize admins.
-  $('mediaInput').addEventListener('change',e=>{
-    selectedFiles=Array.from(e.target.files||[]);
-    const box=$('mediaPreview'); box.innerHTML='';
-    selectedFiles.forEach(file=>{const url=URL.createObjectURL(file);let node;if(file.type.startsWith('image/')){node=document.createElement('img');node.src=url;}else if(file.type.startsWith('video/')){node=document.createElement('video');node.src=url;node.muted=true;node.controls=true;}else return;box.appendChild(node);});
+  const views = ["home", "listings", "profile", "admin", "form"];
+
+  const initData = tg?.initData || "";
+
+  async function api(path, options = {}) {
+    const response = await fetch(path, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        "X-Telegram-Init-Data": initData,
+        ...(options.headers || {})
+      }
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(data.error || "Ошибка сервера");
+    }
+
+    return data;
+  }
+
+  function toast(message) {
+    const el = $("toast");
+    if (!el) return;
+    el.textContent = message;
+    el.classList.add("show");
+    setTimeout(() => el.classList.remove("show"), 2600);
+  }
+
+  function showView(name) {
+    views.forEach(view => {
+      $(view + "View")?.classList.toggle("hidden", view !== name);
+    });
+
+    document.querySelectorAll(".tab").forEach(tab => {
+      tab.classList.toggle("active", tab.dataset.view === name);
+    });
+  }
+
+  document.querySelectorAll(".tab").forEach(tab => {
+    tab.addEventListener("click", () => showView(tab.dataset.view));
   });
-  $('listingForm').addEventListener('submit',e=>{
-    e.preventDefault(); const data=Object.fromEntries(new FormData(e.currentTarget).entries());
-    const item={...data,id:Date.now(),status:'На проверке',media:selectedFiles.length}; listings.unshift(item);
-    $('homeCount').textContent=listings.length; renderListings(); e.currentTarget.reset(); selectedFiles=[]; $('mediaPreview').innerHTML='';
-    showToast('Черновик создан. Для реальной отправки нужен подключённый сервер.'); showView('listings');
+
+  $("startListing")?.addEventListener("click", () => showView("form"));
+  $("newListing")?.addEventListener("click", () => showView("form"));
+  $("closeForm")?.addEventListener("click", () => showView("home"));
+
+  const user = tg?.initDataUnsafe?.user;
+
+  if (user) {
+    $("profileName").textContent =
+      [user.first_name, user.last_name].filter(Boolean).join(" ") ||
+      "SMDC Seller";
+
+    $("profileId").textContent = "Telegram ID: " + user.id;
+  }
+
+  function renderListings(items) {
+    const box = $("listingList");
+    if (!box) return;
+
+    box.innerHTML = "";
+
+    if (!items.length) {
+      box.className = "empty-state";
+      box.textContent = "Пока нет опубликованных объявлений.";
+      return;
+    }
+
+    box.className = "";
+
+    items.forEach(item => {
+      const card = document.createElement("article");
+      card.className = "listing-card";
+
+      const title = document.createElement("b");
+      title.textContent = item.title;
+
+      const description = document.createElement("p");
+      description.textContent = item.description || "";
+
+      const meta = document.createElement("small");
+      meta.textContent = `${item.price} ${item.currency}`;
+
+      card.append(title, description, meta);
+      box.appendChild(card);
+    });
+  }
+
+  async function loadListings() {
+    try {
+      const items = await api("/api/listings");
+      renderListings(items);
+
+      if ($("homeCount")) {
+        $("homeCount").textContent = items.length;
+      }
+    } catch (error) {
+      toast(error.message);
+    }
+  }
+
+  async function loadAdminQueue() {
+    try {
+      const items = await api("/api/admin/queue");
+
+      $("adminTab")?.classList.remove("hidden");
+
+      const box = $("adminQueue");
+      if (!box) return;
+
+      box.innerHTML = "";
+
+      if (!items.length) {
+        box.textContent = "Новых объявлений на проверке нет.";
+        return;
+      }
+
+      items.forEach(item => {
+        const card = document.createElement("article");
+        card.className = "listing-card";
+
+        const title = document.createElement("b");
+        title.textContent = item.title;
+
+        const description = document.createElement("p");
+        description.textContent = item.description || "";
+
+        const meta = document.createElement("small");
+        meta.textContent =
+          `${item.price} ${item.currency} · Telegram ID: ${item.user_id}`;
+
+        const approve = document.createElement("button");
+        approve.textContent = "Одобрить";
+        approve.addEventListener("click", () =>
+          moderate(item.id, "approved")
+        );
+
+        const reject = document.createElement("button");
+        reject.textContent = "Отклонить";
+        reject.addEventListener("click", () =>
+          moderate(item.id, "rejected")
+        );
+
+        card.append(title, description, meta, approve, reject);
+        box.appendChild(card);
+      });
+    } catch (error) {
+      // Обычный пользователь не получит доступ к очереди.
+      $("adminTab")?.classList.add("hidden");
+    }
+  }
+
+  async function moderate(id, status) {
+    try {
+      await api(`/api/admin/listings/${id}/moderate`, {
+        method: "POST",
+        body: JSON.stringify({ status })
+      });
+
+      toast(status === "approved" ? "Объявление опубликовано" : "Объявление отклонено");
+      await loadAdminQueue();
+      await loadListings();
+    } catch (error) {
+      toast(error.message);
+    }
+  }
+
+  $("listingForm")?.addEventListener("submit", async event => {
+    event.preventDefault();
+
+    const form = event.currentTarget;
+    const data = Object.fromEntries(new FormData(form).entries());
+
+    try {
+      const result = await api("/api/listings", {
+        method: "POST",
+        body: JSON.stringify({
+          title: data.title,
+          description: data.description || "",
+          price: data.price,
+          currency: data.currency
+        })
+      });
+
+      form.reset();
+      toast(result.message || "Отправлено на проверку");
+      showView("listings");
+      await loadListings();
+    } catch (error) {
+      toast(error.message);
+    }
   });
-  function renderListings(){const box=$('listingList');box.innerHTML='';if(!listings.length){box.className='empty-state';box.innerHTML='<div class="empty-symbol">▧</div><b>Пока здесь пусто</b><p>Твои объявления появятся здесь после создания.</p>';return;}box.className='';listings.forEach(item=>{const card=document.createElement('article');card.className='listing-card';const title=document.createElement('b');title.textContent=item.title;const meta=document.createElement('small');meta.textContent=`${item.price} ${item.currency} · ${item.media} медиа · ${item.status}`;card.append(title,meta);box.appendChild(card);});}
+
+  async function start() {
+    if (!initData) {
+      toast("Открой Mini App через Telegram");
+      return;
+    }
+
+    await loadListings();
+    await loadAdminQueue();
+  }
+
+  start();
 })();
