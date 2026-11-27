@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#101010" />
+  <title>SMDC Market</title>
+  <link rel="stylesheet" href="./style.css" />
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-mark">S<span>MDC</span></div>
+      <div class="top-actions"><span class="online-dot"></span><span>MARKETPLACE</span></div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="eyebrow">SUPER MECHS · COMMUNITY MARKET</div>
+        <h1>ТВОИ АКТИВЫ.<br><em>ТВОИ ПРАВИЛА.</em></h1>
+        <p>Выставляй игровые аккаунты, добавляй медиа и находи покупателей.</p>
+        <button class="primary-btn" id="startListing">＋ ВЫСТАВИТЬ АККАУНТ</button>
+      </section>
+
+      <nav class="tabs" aria-label="Разделы">
+        <button class="tab active" data-view="home">Главная</button>
+        <button class="tab" data-view="listings">Мои объявления</button>
+        <button class="tab" data-view="profile">Профиль</button>
+        <button class="tab hidden" id="adminTab" data-view="admin">Админ</button>
+      </nav>
+
+      <section id="homeView" class="view">
+        <div class="section-heading"><div><div class="eyebrow">YOUR MARKET</div><h2>Панель продавца</h2></div><span class="pill">SMDC / 01</span></div>
+        <div class="stats-grid">
+          <article class="stat-card"><span>РЕЙТИНГ</span><strong id="homeRating">3.50<span>/5</span></strong><small>Стартовая оценка</small></article>
+          <article class="stat-card"><span>ОБЪЯВЛЕНИЯ</span><strong id="homeCount">0</strong><small>Ваши публикации</small></article>
+        </div>
+        <div class="notice"><span class="notice-icon">✦</span><div><b>Публикация через модерацию</b><p>Каждое объявление проверяет администратор. После одобрения оно появится в канале.</p></div></div>
+        <div class="section-heading compact"><div><div class="eyebrow">HOW IT WORKS</div><h2>Три шага</h2></div></div>
+        <div class="steps"><div><b>01</b><span>Заполни данные</span></div><div><b>02</b><span>Добавь фото и видео</span></div><div><b>03</b><span>Отправь на проверку</span></div></div>
+      </section>
+
+      <section id="listingsView" class="view hidden">
+        <div class="section-heading"><div><div class="eyebrow">YOUR INVENTORY</div><h2>Мои объявления</h2></div><button class="small-red" id="newListing">＋ Новое</button></div>
+        <div id="listingList" class="empty-state"><div class="empty-symbol">▧</div><b>Пока здесь пусто</b><p>Твои объявления появятся здесь после создания.</p></div>
+      </section>
+
+      <section id="profileView" class="view hidden">
+        <div class="section-heading"><div><div class="eyebrow">ACCOUNT</div><h2>Профиль</h2></div></div>
+        <div class="profile-card"><div class="avatar">S</div><div><b id="profileName">SMDC Seller</b><small id="profileId">Telegram ID: ожидается</small></div><div class="rating">★ <b id="profileRating">3.50</b></div></div>
+        <p class="muted">Рейтинг устанавливается администраторами вручную. История изменений будет доступна в полной версии.</p>
+      </section>
+
+      <section id="adminView" class="view hidden">
+        <div class="section-heading"><div><div class="eyebrow">CONTROL CENTER</div><h2>Модерация</h2></div><span class="pill red-pill">ADMIN</span></div>
+        <div class="notice"><span class="notice-icon">!</span><div><b>Демо-панель</b><p>В рабочей версии доступ администратора будет проверяться сервером по Telegram ID. Не используйте клиентский переключатель как защиту.</p></div></div>
+        <div id="adminQueue" class="empty-state"><b>Очередь пуста</b><p>Новые заявки на публикацию появятся здесь.</p></div>
+      </section>
+
+      <section id="formView" class="view hidden">
+        <div class="section-heading"><div><div class="eyebrow">NEW LISTING / 01</div><h2>Новое объявление</h2></div><button class="icon-btn" id="closeForm" aria-label="Закрыть">✕</button></div>
+        <div class="progress"><i></i></div>
+        <form id="listingForm">
+          <label>Название аккаунта<input name="title" maxlength="70" placeholder="Например, SM Account #024" required /></label>
+          <div class="two-col"><label>Цена<input name="price" type="number" min="0" step="0.01" placeholder="500" required /></label><label>Валюта<select name="currency"><option>₽</option><option>€</option><option>$</option></select></label></div>
+          <label>Описание<textarea name="description" maxlength="1200" rows="4" placeholder="Расскажи о характеристиках аккаунта…" required></textarea></label>
+          <div class="upload-head"><div><label class="field-title">Фото и видео</label><small>Можно выбрать несколько файлов</small></div><span class="pill">MEDIA</span></div>
+          <label class="upload-zone" for="mediaInput"><span class="upload-plus">＋</span><b>Добавить медиа</b><small>Изображения и видео с устройства</small><input id="mediaInput" type="file" accept="image/*,video/*" multiple /></label>
+          <div id="mediaPreview" class="media-preview"></div>
+          <div class="notice subtle"><span class="notice-icon">✓</span><div><b>Сначала проверка</b><p>После отправки объявление получит статус «На проверке». Публикация в канале произойдёт только после одобрения.</p></div></div>
+          <button class="primary-btn full" type="submit">ОТПРАВИТЬ НА ПРОВЕРКУ <span>→</span></button>
+          <p class="fine-print">Не добавляй пароли, коды входа и другие секретные данные в описание или медиа.</p>
+        </form>
+      </section>
+    </main>
+    <footer>SMDC MARKET <span>BUILT FOR THE COMMUNITY</span></footer>
+  </div>
+  <div id="toast" class="toast" role="status"></div>
+  <script src="./app.js"></script>
+</body>
+</html>
