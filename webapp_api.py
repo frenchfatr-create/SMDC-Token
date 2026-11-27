@@ -1,8 +1,10 @@
+
 import os
 import time
 import json
 import hmac
 import hashlib
+import logging
 
 from pathlib import Path
 from urllib.parse import parse_qsl
@@ -11,20 +13,26 @@ import aiosqlite
 from aiohttp import web
 from config import BOT_TOKEN
 
+logger = logging.getLogger(__name__)
 
-# База данных
+# -----------------------------
+# НАСТРОЙКИ
+# -----------------------------
+
 DATA_DIR = Path(os.getenv("DATA_DIR", "/app/data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 DB_PATH = DATA_DIR / "webapp_market.db"
 
-# ID администраторов через переменную ADMIN_IDS в BotHost
 ADMIN_IDS = {
     int(value.strip())
     for value in os.getenv("ADMIN_IDS", "").split(",")
     if value.strip().isdigit()
 }
 
+# -----------------------------
+# БАЗА ДАННЫХ
+# -----------------------------
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
@@ -41,15 +49,25 @@ async def init_db():
                 created_at INTEGER NOT NULL
             )
         """)
+
         await db.commit()
 
+    logger.info("WebApp database initialized")
+
+
+# -----------------------------
+# TELEGRAM AUTH
+# -----------------------------
 
 def verify_telegram_data(init_data):
     if not init_data or not BOT_TOKEN:
         return None
 
     try:
-        values = dict(parse_qsl(init_data, keep_blank_values=True))
+        values = dict(
+            parse_qsl(init_data, keep_blank_values=True)
+        )
+
         received_hash = values.pop("hash", None)
 
         if not received_hash:
@@ -80,7 +98,10 @@ def verify_telegram_data(init_data):
             hashlib.sha256
         ).hexdigest()
 
-        if not hmac.compare_digest(calculated_hash, received_hash):
+        if not hmac.compare_digest(
+            calculated_hash,
+            received_hash
+        ):
             return None
 
         user = json.loads(values.get("user", "{}"))
@@ -102,7 +123,10 @@ async def telegram_auth(request, handler):
     if not request.path.startswith("/api/"):
         return await handler(request)
 
-    init_data = request.headers.get("X-Telegram-Init-Data", "")
+    init_data = request.headers.get(
+        "X-Telegram-Init-Data", ""
+    )
+
     user = verify_telegram_data(init_data)
 
     if not user:
@@ -112,12 +136,28 @@ async def telegram_auth(request, handler):
         )
 
     request["tg_user"] = user
+
     return await handler(request)
 
+
+# -----------------------------
+# АДМИНИСТРАТОР
+# -----------------------------
 
 def is_admin(request):
     return request["tg_user"]["id"] in ADMIN_IDS
 
+
+async def admin_status(request):
+    return web.json_response({
+        "is_admin": is_admin(request),
+        "telegram_id": request["tg_user"]["id"]
+    })
+
+
+# -----------------------------
+# ФОРМАТИРОВАНИЕ
+# -----------------------------
 
 def row_to_dict(row):
     return {
@@ -129,11 +169,14 @@ def row_to_dict(row):
         "price": row[5],
         "currency": row[6],
         "status": row[7],
-        "created_at": row[8],
+        "created_at": row[8]
     }
 
 
-# Получить опубликованные объявления
+# -----------------------------
+# ПУБЛИЧНЫЕ ОБЪЯВЛЕНИЯ
+# -----------------------------
+
 async def get_listings(request):
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute("""
@@ -141,12 +184,18 @@ async def get_listings(request):
             WHERE status = 'approved'
             ORDER BY id DESC
         """)
+
         rows = await cursor.fetchall()
 
-    return web.json_response([row_to_dict(row) for row in rows])
+    return web.json_response([
+        row_to_dict(row) for row in rows
+    ])
 
 
-# Получить свои объявления
+# -----------------------------
+# МОИ ОБЪЯВЛЕНИЯ
+# -----------------------------
+
 async def get_my_listings(request):
     user_id = request["tg_user"]["id"]
 
@@ -156,26 +205,41 @@ async def get_my_listings(request):
             WHERE user_id = ?
             ORDER BY id DESC
         """, (user_id,))
+
         rows = await cursor.fetchall()
 
-    return web.json_response([row_to_dict(row) for row in rows])
+    return web.json_response([
+        row_to_dict(row) for row in rows
+    ])
 
 
-# Создать объявление
+# -----------------------------
+# СОЗДАНИЕ ОБЪЯВЛЕНИЯ
+# -----------------------------
+
 async def create_listing(request):
     user = request["tg_user"]
 
     try:
         data = await request.json()
 
-        title = str(data.get("title", "")).strip()
-        description = str(data.get("description", "")).strip()
+        title = str(
+            data.get("title", "")
+        ).strip()
+
+        description = str(
+            data.get("description", "")
+        ).strip()
+
         price = float(data.get("price", 0))
-        currency = str(data.get("currency", "₽"))
+
+        currency = str(
+            data.get("currency", "₽")
+        )
 
         if not title or len(title) > 80:
             return web.json_response(
-                {"error": "Название: от 1 до 80 символов"},
+                {"error": "Название должно содержать от 1 до 80 символов"},
                 status=400
             )
 
@@ -203,33 +267,60 @@ async def create_listing(request):
             status=400
         )
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute("""
-            INSERT INTO listings (
-                user_id, username, title, description,
-                price, currency, status, created_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
-        """, (
-            user["id"],
-            user.get("username"),
-            title,
-            description,
-            price,
-            currency,
-            int(time.time())
-        ))
-        await db.commit()
-        listing_id = cursor.lastrowid
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            cursor = await db.execute("""
+                INSERT INTO listings (
+                    user_id,
+                    username,
+                    title,
+                    description,
+                    price,
+                    currency,
+                    status,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
+            """, (
+                user["id"],
+                user.get("username"),
+                title,
+                description,
+                price,
+                currency,
+                int(time.time())
+            ))
 
-    return web.json_response({
-        "success": True,
-        "id": listing_id,
-        "status": "pending"
-    })
+            await db.commit()
+
+            listing_id = cursor.lastrowid
+
+        logger.info(
+            "Listing %s created by user %s",
+            listing_id,
+            user["id"]
+        )
+
+        return web.json_response({
+            "success": True,
+            "id": listing_id,
+            "status": "pending",
+            "message": "Объявление отправлено на проверку"
+        })
+
+    except Exception:
+        logger.exception("Failed to create listing")
+
+        return web.json_response(
+            {"error": "Не удалось сохранить объявление"},
+            status=500
+        )
 
 
-# Очередь модерации
+# -----------------------------
+# ОЧЕРЕДЬ МОДЕРАЦИИ
+# -----------------------------
+
 async def admin_queue(request):
     if not is_admin(request):
         return web.json_response(
@@ -243,12 +334,18 @@ async def admin_queue(request):
             WHERE status = 'pending'
             ORDER BY id ASC
         """)
+
         rows = await cursor.fetchall()
 
-    return web.json_response([row_to_dict(row) for row in rows])
+    return web.json_response([
+        row_to_dict(row) for row in rows
+    ])
 
 
-# Одобрить или отклонить объявление
+# -----------------------------
+# ОДОБРЕНИЕ И ОТКЛОНЕНИЕ
+# -----------------------------
+
 async def moderate_listing(request):
     if not is_admin(request):
         return web.json_response(
@@ -257,8 +354,12 @@ async def moderate_listing(request):
         )
 
     try:
-        listing_id = int(request.match_info["listing_id"])
+        listing_id = int(
+            request.match_info["listing_id"]
+        )
+
         data = await request.json()
+
         status = data.get("status")
 
         if status not in ["approved", "rejected"]:
@@ -279,6 +380,7 @@ async def moderate_listing(request):
             SET status = ?
             WHERE id = ? AND status = 'pending'
         """, (status, listing_id))
+
         await db.commit()
 
         if cursor.rowcount == 0:
@@ -287,19 +389,53 @@ async def moderate_listing(request):
                 status=404
             )
 
-    return web.json_response({"success": True, "status": status})
+    logger.info(
+        "Listing %s moderated: %s",
+        listing_id,
+        status
+    )
+
+    return web.json_response({
+        "success": True,
+        "status": status
+    })
 
 
-# Подключение API к серверу
+# -----------------------------
+# ПОДКЛЮЧЕНИЕ API
+# -----------------------------
+
 def setup_api(app):
     app.middlewares.append(telegram_auth)
 
-    app.router.add_get("/api/listings", get_listings)
-    app.router.add_get("/api/my-listings", get_my_listings)
-    app.router.add_post("/api/listings", create_listing)
+    app.router.add_get(
+        "/api/listings",
+        get_listings
+    )
 
-    app.router.add_get("/api/admin/queue", admin_queue)
+    app.router.add_get(
+        "/api/my-listings",
+        get_my_listings
+    )
+
+    app.router.add_post(
+        "/api/listings",
+        create_listing
+    )
+
+    app.router.add_get(
+        "/api/admin/status",
+        admin_status
+    )
+
+    app.router.add_get(
+        "/api/admin/queue",
+        admin_queue
+    )
+
     app.router.add_post(
         "/api/admin/listings/{listing_id}/moderate",
         moderate_listing
     )
+
+    logger.info("WebApp API routes registered")
