@@ -67,8 +67,8 @@ async def start_web_server():
     
     from webapp_api import init_db, setup_api
 
-await init_db()
-setup_api(app)
+    await init_db()
+    setup_api(app)
 
     app.router.add_get("/health", health)
     app.router.add_get("/", index)
